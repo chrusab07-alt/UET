@@ -41,11 +41,6 @@
           </button>
         </li>
         <li>
-          <button class="nav-btn" data-page="stops">
-            <i class="lucide-map-pin"></i> All Stops
-          </button>
-        </li>
-        <li>
           <button class="nav-btn" data-page="routes">
             <i class="lucide-route"></i> Route Schedules
           </button>
@@ -69,10 +64,14 @@
       </ul>
 
       <div class="header-actions">
-        <button class="btn-search-trigger" onclick="navigateToPage('stops')">
+        <form id="header-stop-search-form" class="header-search-form" autocomplete="off">
           <i class="lucide-search"></i>
-          <span>Search Stop...</span>
-        </button>
+          <input id="header-stop-search" type="text" placeholder="Search Stop..." aria-label="Search stop" />
+          <button type="submit" class="btn-search-trigger">
+            <i class="lucide-search"></i>
+            <span>Search</span>
+          </button>
+        </form>
       </div>
     </div>
   </header>
@@ -84,12 +83,6 @@
         <a href="#home" class="mobile-nav-item active" data-page="home">
           <i class="lucide-home"></i>
           <span>Home</span>
-        </a>
-      </li>
-      <li>
-        <a href="#stops" class="mobile-nav-item" data-page="stops">
-          <i class="lucide-map-pin"></i>
-          <span>Stops</span>
         </a>
       </li>
       <li>
@@ -225,24 +218,7 @@
       </div>
     </section>
 
-    <!-- PAGE 3: STOPS DIRECTORY PAGE -->
-    <section id="page-stops" class="page-section">
-      <div class="section-header">
-        <h2 class="section-title">
-          <i class="lucide-map-pin" style="color:var(--primary-light)"></i>
-          <span>All UET Bus Stops Directory</span>
-        </h2>
-        <p style="font-size:0.9rem; color:var(--text-muted);">
-          Search any stop to see all connecting bus routes and pickup times.
-        </p>
-      </div>
-
-      <div id="stops-list-container">
-        <!-- Dynamically rendered by renderStopsPage() -->
-      </div>
-    </section>
-
-    <!-- PAGE 4: ROUTE DETAILS PAGE -->
+    <!-- PAGE 3: ROUTE DETAILS PAGE -->
     <section id="page-routes" class="page-section">
       <div id="routes-detail-container">
         <!-- Dynamically rendered by renderRoutesPage() -->

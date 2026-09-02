@@ -6,6 +6,7 @@ let appState = {
   nearestResult: null,
   activePage: 'home',
   searchQuery: '',
+  routeScheduleQuery: '',
   favorites: JSON.parse(localStorage.getItem('uet_fav_routes') || '[]'),
   selectedRouteId: null,
   map: null,
@@ -16,7 +17,6 @@ let appState = {
 document.addEventListener('DOMContentLoaded', () => {
   initUIEvents();
   renderHomePage();
-  renderStopsPage();
   renderRoutesPage();
   renderFaqs();
   updateFavoritesBadge();
@@ -169,6 +169,23 @@ function initUIEvents() {
     btnLocate.addEventListener('click', detectUserGeolocation);
   }
 
+  // Header route stop search form
+  const headerSearchForm = document.getElementById('header-stop-search-form');
+  if (headerSearchForm) {
+    headerSearchForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      handleHeaderStopSearch();
+    });
+  }
+
+  const routeScheduleInput = document.getElementById('route-schedule-search');
+  if (routeScheduleInput) {
+    routeScheduleInput.addEventListener('input', (e) => {
+      appState.routeScheduleQuery = e.target.value.trim();
+      renderRoutesPage();
+    });
+  }
+
   // Modal Close buttons
   document.querySelectorAll('.modal-close, .modal-overlay').forEach(el => {
     el.addEventListener('click', (e) => {
@@ -219,6 +236,53 @@ function detectUserGeolocation() {
 // Normalize text for fuzzy matching (remove spaces, dashes, dots for comparison)
 function normalizeText(text) {
   return text.toLowerCase().replace(/[\s\-\.\/,]+/g, '');
+}
+
+function normalizeStopSearchText(value) {
+  return (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function findExactStopMatches(query) {
+  const normalizedQuery = normalizeStopSearchText(query);
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  return UET_DATA.routes.filter(route =>
+    route.stops.some(stop => normalizeStopSearchText(stop.name) === normalizedQuery)
+  );
+}
+
+function handleHeaderStopSearch() {
+  const headerInput = document.getElementById('header-stop-search');
+  const rawQuery = headerInput ? headerInput.value : '';
+  const normalizedQuery = normalizeStopSearchText(rawQuery);
+
+  if (!normalizedQuery) {
+    return;
+  }
+
+  appState.routeScheduleQuery = rawQuery;
+  const matchingRoutes = findExactStopMatches(rawQuery);
+
+  if (matchingRoutes.length > 0) {
+    appState.selectedCampus = matchingRoutes[0].campusId;
+  }
+
+  navigateToPage('routes');
+  renderRoutesPage();
+
+  const routeSearchInput = document.getElementById('route-schedule-search');
+  if (routeSearchInput) {
+    routeSearchInput.value = rawQuery;
+  }
+
+  setTimeout(() => {
+    const highlightedMatch = document.querySelector('.route-search-match');
+    if (highlightedMatch) {
+      highlightedMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, 100);
 }
 
 // Location Text Search Handler
@@ -623,15 +687,34 @@ function renderRoutesPage() {
   const container = document.getElementById('routes-detail-container');
   if (!container) return;
 
-  const displayRoutes = UET_DATA.routes.filter(r => 
+  const routeSearchQuery = normalizeStopSearchText(appState.routeScheduleQuery);
+  const selectedRoutes = UET_DATA.routes.filter(r => 
     !appState.selectedCampus || r.campusId === appState.selectedCampus
   );
+  const displayRoutes = routeSearchQuery
+    ? findExactStopMatches(routeSearchQuery)
+    : selectedRoutes;
 
   let html = `
     <div style="margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
       <div>
         <h2>Official UET Bus Routes (${appState.selectedCampus === 'ksk' ? 'KSK New Campus' : 'Main Campus - 22 Morning Routes'})</h2>
         <p style="color:var(--text-muted); font-size:0.9rem;">Morning Arrival Schedules extracted from official Transport Office PDF</p>
+      </div>
+    </div>
+
+    <div class="info-card" style="margin-bottom:1.25rem;">
+      <div class="search-field-wrapper" style="margin:0;">
+        <i class="lucide-search"></i>
+        <input
+          type="text"
+          id="route-schedule-search"
+          class="search-input"
+          placeholder="Search your bus stop..."
+          value="${appState.routeScheduleQuery.replace(/"/g, '&quot;')}"
+          aria-label="Search your bus stop"
+          oninput="appState.routeScheduleQuery = this.value.trim(); renderRoutesPage();"
+        />
       </div>
     </div>
 
@@ -646,6 +729,18 @@ function renderRoutesPage() {
       </div>
     </div>
   `;
+
+  if (routeSearchQuery && displayRoutes.length === 0) {
+    html += `
+      <div class="info-card no-result-box">
+        <div class="no-result-icon"><i class="lucide-search-x"></i></div>
+        <h3>No result found</h3>
+        <p>No bus stop matching your search was found.</p>
+      </div>
+    `;
+    container.innerHTML = html;
+    return;
+  }
 
   displayRoutes.forEach(route => {
     const isFav = appState.favorites.includes(route.id);
@@ -691,13 +786,20 @@ function renderRoutesPage() {
               </tr>
             </thead>
             <tbody>
-              ${route.stops.map((s, idx) => `
-                <tr ${idx === route.stops.length - 1 ? 'style="background:#EFF6FF; font-weight:700;"' : ''}>
-                  <td>${idx + 1}</td>
-                  <td>${s.name} ${idx === route.stops.length - 1 ? '🏁 (Campus Destination)' : ''}</td>
-                  <td><strong>${s.time}</strong></td>
-                </tr>
-              `).join('')}
+              ${route.stops.map((s, idx) => {
+                const isMatch = routeSearchQuery && normalizeStopSearchText(s.name) === routeSearchQuery;
+                return `
+                  <tr class="${isMatch ? 'route-search-match' : ''}" ${isMatch ? 'data-stop-match="true"' : ''} ${idx === route.stops.length - 1 ? 'style="background:#EFF6FF; font-weight:700;"' : ''}>
+                    <td>${idx + 1}</td>
+                    <td>
+                      ${s.name}
+                      ${idx === route.stops.length - 1 ? '🏁 (Campus Destination)' : ''}
+                      ${isMatch ? '<span class="route-match-badge">Matched Stop</span>' : ''}
+                    </td>
+                    <td><strong>${s.time}</strong></td>
+                  </tr>
+                `;
+              }).join('')}
             </tbody>
           </table>
         </div>
@@ -721,6 +823,15 @@ function renderRoutesPage() {
   });
 
   container.innerHTML = html;
+
+  if (routeSearchQuery) {
+    setTimeout(() => {
+      const highlightedMatch = document.querySelector('.route-search-match');
+      if (highlightedMatch) {
+        highlightedMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
+  }
 }
 
 // View specific route detail (scroll or navigate)
@@ -937,8 +1048,9 @@ function initLeafletMap(containerId, centerCoords, zoomLevel, points) {
 // Route URL Hashes
 function handleUrlRouting() {
   const hash = window.location.hash.replace('#', '');
-  if (hash && ['home', 'result', 'stops', 'routes', 'favorites', 'notices', 'contact'].includes(hash)) {
-    if (hash === 'favorites') renderFavoritesPage();
-    navigateToPage(hash);
+  const normalizedHash = hash === 'stops' ? 'routes' : hash;
+  if (normalizedHash && ['home', 'result', 'routes', 'favorites', 'notices', 'contact'].includes(normalizedHash)) {
+    if (normalizedHash === 'favorites') renderFavoritesPage();
+    navigateToPage(normalizedHash);
   }
 }
