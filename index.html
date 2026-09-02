@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UET Bus Route Info - Find Your Campus Bus</title>
+  <meta name="description" content="Official UET Lahore bus route finder for Main Campus & KSK New Campus. Find stops, bus numbers, driver contact details, and pickup timings easily.">
+
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Leaflet CSS & JS for Map view -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- App Stylesheet -->
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <!-- Top App Header -->
+  <header class="app-header">
+    <div class="header-container">
+      <a href="#home" class="brand-logo" onclick="navigateToPage('home')">
+        <i class="lucide-bus" style="color:var(--accent); font-size:1.6rem;"></i>
+        <div>
+          <span>UET BUS ROUTE INFO</span>
+          <span class="brand-badge">Official</span>
+        </div>
+      </a>
+
+      <ul class="nav-links">
+        <li>
+          <button class="nav-btn active" data-page="home">
+            <i class="lucide-home"></i> Home
+          </button>
+        </li>
+        <li>
+          <button class="nav-btn" data-page="stops">
+            <i class="lucide-map-pin"></i> All Stops
+          </button>
+        </li>
+        <li>
+          <button class="nav-btn" data-page="routes">
+            <i class="lucide-route"></i> Route Schedules
+          </button>
+        </li>
+        <li>
+          <button class="nav-btn" data-page="favorites" onclick="renderFavoritesPage()">
+            <i class="lucide-bookmark"></i> Saved Routes
+            <span class="fav-badge-count brand-badge" style="background:var(--accent); color:var(--primary-dark); display:none;">0</span>
+          </button>
+        </li>
+        <li>
+          <button class="nav-btn" data-page="notices">
+            <i class="lucide-bell"></i> Notices & FAQs
+          </button>
+        </li>
+        <li>
+          <button class="nav-btn" data-page="contact">
+            <i class="lucide-phone"></i> Transport Office
+          </button>
+        </li>
+      </ul>
+
+      <div class="header-actions">
+        <button class="btn-search-trigger" onclick="navigateToPage('stops')">
+          <i class="lucide-search"></i>
+          <span>Search Stop...</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Mobile Bottom Navigation Bar -->
+  <nav class="mobile-nav">
+    <ul class="mobile-nav-items">
+      <li>
+        <a href="#home" class="mobile-nav-item active" data-page="home">
+          <i class="lucide-home"></i>
+          <span>Home</span>
+        </a>
+      </li>
+      <li>
+        <a href="#stops" class="mobile-nav-item" data-page="stops">
+          <i class="lucide-map-pin"></i>
+          <span>Stops</span>
+        </a>
+      </li>
+      <li>
+        <a href="#routes" class="mobile-nav-item" data-page="routes">
+          <i class="lucide-route"></i>
+          <span>Routes</span>
+        </a>
+      </li>
+      <li>
+        <a href="#favorites" class="mobile-nav-item" data-page="favorites" onclick="renderFavoritesPage()">
+          <i class="lucide-bookmark"></i>
+          <span>Saved</span>
+        </a>
+      </li>
+      <li>
+        <a href="#contact" class="mobile-nav-item" data-page="contact">
+          <i class="lucide-phone"></i>
+          <span>Office</span>
+        </a>
+      </li>
+    </ul>
+  </nav>
+
+  <!-- Main Content Wrapper -->
+  <main class="main-wrapper">
+
+    <!-- Notice Ticker Banner -->
+    <div class="notice-ticker">
+      <span class="notice-badge"><i class="lucide-bell"></i> Transport Notice</span>
+      <div class="notice-text">
+        Morning buses arrive strictly at 07:50 AM (KSK) & 07:45 AM (Main). Departure from campus is at 04:15 PM daily.
+      </div>
+    </div>
+
+    <!-- PAGE 1: HOME PAGE -->
+    <section id="page-home" class="page-section active">
+      <div class="hero-card">
+        <div class="hero-content">
+          <h1 class="hero-title">Find Your <span>UET Bus Route</span></h1>
+          <p class="hero-subtitle">
+            Quickly locate your nearest UET pickup stop, view complete route timings, driver contact info, and navigate seamlessly to your bus stop.
+          </p>
+
+          <!-- Campus Toggle Selector -->
+          <div class="campus-toggle-wrapper">
+            <button class="campus-btn active" data-campus="ksk">
+              <i class="lucide-building-2"></i> KSK / New Campus
+            </button>
+            <button class="campus-btn" data-campus="main">
+              <i class="lucide-graduation-cap"></i> Main Campus (GT Road)
+            </button>
+          </div>
+
+          <!-- Location Search Card -->
+          <div class="search-hero-box">
+            <div class="search-input-group">
+              <div class="search-field-wrapper">
+                <i class="lucide-map-pin"></i>
+                <input type="text" id="main-location-input" class="search-input" placeholder="Enter your area, street, or landmark (e.g. Wapda Town, Johar Town, Defense, Taj Bagh)...">
+              </div>
+              <button class="btn-locate" id="btn-locate-me">
+                <i class="lucide-crosshair"></i> Detect My Area
+              </button>
+              <button class="btn-find-bus" id="btn-find-bus">
+                <i class="lucide-search"></i> Find Bus Route
+              </button>
+            </div>
+
+            <!-- Popular Area Chips Container -->
+            <div id="area-chips-wrapper" class="quick-chips-container">
+              <!-- Dynamically rendered -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Stats Ribbon -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon"><i class="lucide-bus"></i></div>
+          <div>
+            <div class="stat-val">19+</div>
+            <div class="stat-lbl">Active Bus Routes</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon"><i class="lucide-map-pin"></i></div>
+          <div>
+            <div class="stat-val">120+</div>
+            <div class="stat-lbl">Covered Bus Stops</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon"><i class="lucide-users"></i></div>
+          <div>
+            <div class="stat-val">15,000+</div>
+            <div class="stat-lbl">Daily Student Commuters</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon"><i class="lucide-clock"></i></div>
+          <div>
+            <div class="stat-val">07:50 AM</div>
+            <div class="stat-lbl">On-Time Campus Arrival</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Route Cards Section -->
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="lucide-route" style="color:var(--primary-light)"></i>
+          <span>Available Campus Routes</span>
+        </h2>
+        <span style="font-size:0.85rem; color:var(--text-muted)">Select any route to view stop details and driver contacts</span>
+      </div>
+
+      <div id="home-routes-grid" class="routes-grid">
+        <!-- Dynamically rendered -->
+      </div>
+    </section>
+
+    <!-- PAGE 2: BUS ROUTE RESULT PAGE -->
+    <section id="page-result" class="page-section">
+      <div style="margin-bottom:1rem;">
+        <button class="btn-secondary" onclick="navigateToPage('home')">
+          <i class="lucide-arrow-left"></i> Back to Search
+        </button>
+      </div>
+
+      <div id="result-content-container">
+        <!-- Dynamically rendered by executeFindNearest() -->
+      </div>
+    </section>
+
+    <!-- PAGE 3: STOPS DIRECTORY PAGE -->
+    <section id="page-stops" class="page-section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="lucide-map-pin" style="color:var(--primary-light)"></i>
+          <span>All UET Bus Stops Directory</span>
+        </h2>
+        <p style="font-size:0.9rem; color:var(--text-muted);">
+          Search any stop to see all connecting bus routes and pickup times.
+        </p>
+      </div>
+
+      <div id="stops-list-container">
+        <!-- Dynamically rendered by renderStopsPage() -->
+      </div>
+    </section>
+
+    <!-- PAGE 4: ROUTE DETAILS PAGE -->
+    <section id="page-routes" class="page-section">
+      <div id="routes-detail-container">
+        <!-- Dynamically rendered by renderRoutesPage() -->
+      </div>
+    </section>
+
+    <!-- PAGE 5: SAVED / FAVORITES PAGE -->
+    <section id="page-favorites" class="page-section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="lucide-bookmark" style="color:var(--accent)"></i>
+          <span>My Saved Bus Routes</span>
+        </h2>
+        <p style="font-size:0.9rem; color:var(--text-muted);">Bookmarked routes for quick reference</p>
+      </div>
+
+      <div id="favorites-content-container">
+        <!-- Dynamically rendered -->
+      </div>
+    </section>
+
+    <!-- PAGE 6: NOTICES & FAQS PAGE -->
+    <section id="page-notices" class="page-section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="lucide-help-circle" style="color:var(--primary-light)"></i>
+          <span>Fresher Guidance & FAQs</span>
+        </h2>
+        <p style="font-size:0.9rem; color:var(--text-muted);">Essential transport rules and guidelines for first-year UETians</p>
+      </div>
+
+      <div class="details-split-grid">
+        <div>
+          <div class="info-card">
+            <h3 class="info-card-title"><i class="lucide-list"></i> Frequently Asked Questions</h3>
+            <div id="faq-accordion-container">
+              <!-- Rendered via JS -->
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="info-card">
+            <h3 class="info-card-title"><i class="lucide-shield-alert"></i> Transport Rules for Students</h3>
+            <ul style="font-size:0.88rem; color:var(--text-muted); line-height:1.7; padding-left:1.2rem;">
+              <li>Always display your valid UET Student Transport Pass when boarding.</li>
+              <li>Arrive at your assigned pickup stop at least 5-10 minutes prior to scheduled departure.</li>
+              <li>Maintain discipline and keep the university buses clean.</li>
+              <li>For any urgent emergency or schedule query, contact the Chairman Transport Committee.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAGE 7: CONTACT TRANSPORT OFFICE PAGE -->
+    <section id="page-contact" class="page-section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="lucide-phone-call" style="color:var(--primary-light)"></i>
+          <span>Transport Office Contact</span>
+        </h2>
+        <p style="font-size:0.9rem; color:var(--text-muted);">Get in touch with UET Transport Committee</p>
+      </div>
+
+      <div class="details-split-grid">
+        <div>
+          <div class="info-card">
+            <h3 class="info-card-title"><i class="lucide-user"></i> Chairman Transport Committee</h3>
+            <div style="background:#F8FAFC; padding:1.25rem; border-radius:var(--radius-md); margin-bottom:1.25rem;">
+              <h3 style="color:var(--primary); margin-bottom:0.25rem;">Mr. M. Mushtaq</h3>
+              <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:0.75rem;">Chairman, Transport Committee (UET Main & New Campus)</p>
+              
+              <div style="display:flex; align-items:center; gap:0.75rem; font-size:1rem; font-weight:700;">
+                <i class="lucide-phone" style="color:var(--success);"></i>
+                <span>Mobile / WhatsApp: <a href="tel:03040165776">0304-0165776</a></span>
+              </div>
+            </div>
+
+            <h3 class="info-card-title"><i class="lucide-map-pin"></i> Transport Office Locations</h3>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+              <div style="background:white; border:1px solid var(--border-light); padding:1rem; border-radius:var(--radius-md);">
+                <h4 style="color:var(--primary); margin-bottom:0.3rem;">Main Campus Office</h4>
+                <p style="font-size:0.85rem; color:var(--text-muted);">Transport Section, Near Main Auditorium & Workshop area, UET Lahore GT Road.</p>
+              </div>
+              <div style="background:white; border:1px solid var(--border-light); padding:1rem; border-radius:var(--radius-md);">
+                <h4 style="color:var(--primary); margin-bottom:0.3rem;">KSK New Campus Office</h4>
+                <p style="font-size:0.85rem; color:var(--text-muted);">Admin Block Transport Wing, Ground Floor, UET New Campus Kala Shah Kaku.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="info-card">
+            <h3 class="info-card-title"><i class="lucide-message-square"></i> Send Transport Query</h3>
+            <form onsubmit="event.preventDefault(); alert('Thank you! Your query has been submitted to the UET Transport Office.'); this.reset();">
+              <div style="margin-bottom:0.85rem;">
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem;">Student Name</label>
+                <input type="text" required class="search-input" style="padding:0.6rem 0.8rem;" placeholder="e.g. Ali Ahmed">
+              </div>
+              <div style="margin-bottom:0.85rem;">
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem;">Registration No.</label>
+                <input type="text" required class="search-input" style="padding:0.6rem 0.8rem;" placeholder="e.g. 2026-CS-101">
+              </div>
+              <div style="margin-bottom:0.85rem;">
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem;">Message / Query</label>
+                <textarea required rows="4" class="search-input" style="padding:0.6rem 0.8rem;" placeholder="Mention your stop or bus route query..."></textarea>
+              </div>
+              <button type="submit" class="btn-find-bus" style="width:100%;">
+                <i class="lucide-send"></i> Submit Query
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Universal Print / Download Modal -->
+  <div id="print-modal" class="modal-overlay">
+    <div class="modal-content">
+      <button class="modal-close"><i class="lucide-x"></i></button>
+      <div id="print-modal-body">
+        <!-- Rendered by printRouteSchedule() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer style="background:var(--primary-dark); color:white; padding:2rem 1.5rem; text-align:center; font-size:0.88rem; border-top:1px solid rgba(255,255,255,0.1);">
+    <div style="max-width:1280px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+      <div style="display:flex; align-items:center; gap:0.5rem; font-weight:700;">
+        <i class="lucide-bus" style="color:var(--accent);"></i> UET BUS ROUTE INFO
+      </div>
+      <div style="color:rgba(255,255,255,0.7);">
+        Designed for UET Lahore Students & Staff | Data Source: Transport Office Schedule
+      </div>
+      <div>
+        <a href="tel:03040165776" style="color:var(--accent); font-weight:600;"><i class="lucide-phone" style="font-size:0.8rem;"></i> 0304-0165776</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- App Data and Scripts -->
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    // Initialize Lucide icons after rendering
+    lucide.createIcons();
+  </script>
+</body>
+</html>
