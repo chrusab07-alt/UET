@@ -161,10 +161,14 @@ async function geocodeLocationQuery(query) {
   };
 }
 
-function buildNearbyRouteResults(userLat, userLng, radiusKm = 3) {
+function buildNearbyRouteResults(userLat, userLng, radiusKm = 3, campusFilter = null) {
+  const candidateRoutes = campusFilter
+    ? UET_DATA.routes.filter(route => route.campusId === campusFilter)
+    : UET_DATA.routes;
+
   const routeMap = new Map();
 
-  UET_DATA.routes.forEach(route => {
+  candidateRoutes.forEach(route => {
     let bestNearbyStop = null;
     let bestDistanceKm = Infinity;
 
@@ -189,10 +193,14 @@ function buildNearbyRouteResults(userLat, userLng, radiusKm = 3) {
     .sort((a, b) => a.distanceKm - b.distanceKm);
 }
 
-function buildNearbyStopSuggestions(userLat, userLng, maxDistanceKm = 1.5) {
+function buildNearbyStopSuggestions(userLat, userLng, maxDistanceKm = 1.5, campusFilter = null) {
+  const candidateRoutes = campusFilter
+    ? UET_DATA.routes.filter(route => route.campusId === campusFilter)
+    : UET_DATA.routes;
+
   const stopMap = new Map();
 
-  UET_DATA.routes.forEach(route => {
+  candidateRoutes.forEach(route => {
     route.stops.forEach(stop => {
       const distanceKm = calculateDistance(userLat, userLng, stop.lat, stop.lng);
       if (distanceKm <= maxDistanceKm) {
@@ -213,7 +221,7 @@ function buildNearbyStopSuggestions(userLat, userLng, maxDistanceKm = 1.5) {
 }
 
 function showNearbyBusRoutes(lat, lng, locationLabel, radiusKm = 3) {
-  const nearbyRoutes = buildNearbyRouteResults(lat, lng, radiusKm);
+  const nearbyRoutes = buildNearbyRouteResults(lat, lng, radiusKm, appState.selectedCampus);
   appState.nearbyRouteResults = nearbyRoutes;
   appState.locationSearchError = null;
   appState.nearestResult = null;
@@ -668,7 +676,7 @@ function renderResultPage() {
     const locationLabel = appState.currentLocation ? appState.currentLocation.name : 'Selected location';
     const userLat = appState.currentLocation ? appState.currentLocation.lat : nearbyResults[0].route.stops[0].lat;
     const userLng = appState.currentLocation ? appState.currentLocation.lng : nearbyResults[0].route.stops[0].lng;
-    const nearbyStops = buildNearbyStopSuggestions(userLat, userLng, 1.5);
+    const nearbyStops = buildNearbyStopSuggestions(userLat, userLng, 1.5, appState.selectedCampus);
     const yourStops = nearbyStops.filter(item => item.distanceKm <= 0.5);
     const suggestedStops = nearbyStops.filter(item => item.distanceKm > 0.5 && item.distanceKm <= 1.5);
 
