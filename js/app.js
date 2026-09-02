@@ -4,6 +4,8 @@ let appState = {
   selectedCampus: 'ksk', // 'ksk' or 'main'
   currentLocation: null, // { lat, lng, name }
   nearestResult: null,
+  nearbyRouteResults: [],
+  locationSearchError: null,
   activePage: 'home',
   searchQuery: '',
   routeScheduleQuery: '',
@@ -13,9 +15,14 @@ let appState = {
   markers: []
 };
 
+function getGoogleMapsApiKey() {
+  return (window.UET_CONFIG && window.UET_CONFIG.googleMapsApiKey) || '';
+}
+
 // Initialize Application on DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
   initUIEvents();
+  loadGoogleMapsApi();
   renderHomePage();
   renderRoutesPage();
   renderFaqs();
@@ -34,6 +41,175 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
     Math.sin(dLon/2) * Math.sin(dLon/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
+}
+
+function loadGoogleMapsApi() {
+  const apiKey = getGoogleMapsApiKey();
+  if (!apiKey) {
+    return;
+  }
+
+  if (window.google && window.google.maps && window.google.maps.places) {
+    initGoogleLocationSearch();
+    return;
+  }
+
+  if (document.querySelector('script[data-google-maps="uet"]')) {
+    return;
+  }
+
+  window.__uetGoogleMapsReady = function () {
+    initGoogleLocationSearch();
+  };
+
+  const script = document.createElement('script');
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=window.__uetGoogleMapsReady`;
+  script.async = true;
+  script.defer = true;
+  script.setAttribute('data-google-maps', 'uet');
+  document.head.appendChild(script);
+}
+
+function initGoogleLocationSearch() {
+  const input = document.getElementById('main-location-input');
+  if (!input || !window.google || !window.google.maps || !window.google.maps.places) {
+    return;
+  }
+
+  if (input.dataset.googleAutocompleteBound === 'true') {
+    return;
+  }
+
+  const autocomplete = new window.google.maps.places.Autocomplete(input, {
+    types: ['geocode'],
+    componentRestrictions: { country: 'pk' }
+  });
+
+  autocomplete.addListener('place_changed', () => {
+    const place = autocomplete.getPlace();
+    const loc = place && place.geometry && place.geometry.location;
+    if (!loc) {
+      appState.locationSearchError = 'Location not found. Please enter a valid address or area.';
+      appState.nearbyRouteResults = [];
+      renderResultPage();
+      navigateToPage('result');
+      return;
+    }
+
+    const lat = loc.lat();
+    const lng = loc.lng();
+    const label = place.formatted_address || input.value.trim();
+    showNearbyBusRoutes(lat, lng, label);
+  });
+
+  input.dataset.googleAutocompleteBound = 'true';
+}
+
+async function geocodeLocationQuery(query) {
+  const trimmed = (query || '').trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const apiKey = getGoogleMapsApiKey();
+  if (apiKey) {
+    try {
+      const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(trimmed)}&key=${apiKey}`);
+      const data = await response.json();
+      const result = data && data.results && data.results[0];
+      if (data.status === 'OK' && result && result.geometry && result.geometry.location) {
+        return {
+          lat: result.geometry.location.lat,
+          lng: result.geometry.location.lng,
+          formattedAddress: result.formatted_address || trimmed
+        };
+      }
+    } catch (error) {
+      console.warn('Google Geocoding lookup failed:', error);
+    }
+  }
+
+  const normalizedQuery = normalizeText(trimmed).toLowerCase();
+  const ignoredWords = new Set(['a', 'an', 'the', 'is', 'this', 'that', 'for', 'in', 'on', 'at', 'near', 'of', 'my', 'your', 'city', 'area', 'place', 'lahore', 'lhr', 'pakistan']);
+  const queryWords = (trimmed.toLowerCase().match(/[a-z0-9]+/g) || [])
+    .map(w => normalizeText(w))
+    .filter(w => w.length > 2 && !ignoredWords.has(w));
+
+  const fallbackMatch = LAHORE_AREAS.find(area => {
+    const normalizedArea = normalizeText(area.name).toLowerCase();
+    if (normalizedArea.includes(normalizedQuery) || normalizedQuery.includes(normalizedArea)) {
+      return true;
+    }
+
+    const areaWords = (area.name.toLowerCase().match(/[a-z0-9]+/g) || []).map(w => normalizeText(w));
+    if (!areaWords.length || !queryWords.length) {
+      return false;
+    }
+
+    const overlap = queryWords.filter(word => areaWords.includes(word) || normalizedArea.includes(word)).length;
+    return overlap >= Math.min(2, Math.max(1, queryWords.length - 1));
+  });
+
+  if (!fallbackMatch) {
+    return null;
+  }
+
+  return {
+    lat: fallbackMatch.lat,
+    lng: fallbackMatch.lng,
+    formattedAddress: fallbackMatch.name
+  };
+}
+
+function buildNearbyRouteResults(userLat, userLng, radiusKm = 3) {
+  const routeMap = new Map();
+
+  UET_DATA.routes.forEach(route => {
+    let bestNearbyStop = null;
+    let bestDistanceKm = Infinity;
+
+    route.stops.forEach(stop => {
+      const distanceKm = calculateDistance(userLat, userLng, stop.lat, stop.lng);
+      if (distanceKm <= radiusKm && distanceKm < bestDistanceKm) {
+        bestNearbyStop = stop;
+        bestDistanceKm = distanceKm;
+      }
+    });
+
+    if (bestNearbyStop) {
+      routeMap.set(route.id, {
+        route,
+        stop: bestNearbyStop,
+        distanceKm: bestDistanceKm
+      });
+    }
+  });
+
+  return Array.from(routeMap.values())
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+}
+
+function showNearbyBusRoutes(lat, lng, locationLabel, radiusKm = 3) {
+  const nearbyRoutes = buildNearbyRouteResults(lat, lng, radiusKm);
+  appState.nearbyRouteResults = nearbyRoutes;
+  appState.locationSearchError = null;
+  appState.nearestResult = null;
+
+  if (nearbyRoutes.length === 0) {
+    appState.nearbyRouteResults = [];
+    renderResultPage();
+    navigateToPage('result');
+    return;
+  }
+
+  appState.currentLocation = {
+    lat,
+    lng,
+    name: locationLabel
+  };
+
+  renderResultPage();
+  navigateToPage('result');
 }
 
 function getDisplayDriverPhone(route) {
@@ -227,15 +403,16 @@ function detectUserGeolocation() {
       };
 
       document.getElementById('main-location-input').value = "GPS: Current Location";
-      executeFindNearest(userLat, userLng, "Your Current Location");
+      showNearbyBusRoutes(userLat, userLng, "Your Current Location");
     },
     (err) => {
       btnLocate.innerHTML = `<i class="lucide-crosshair"></i> Detect My Area`;
       console.warn("GPS error/denied. Using sample Lahore area coordinates.");
-      alert("Could not access GPS coordinates. Defaulting search to Kalma Chowk, Lahore area.");
       const sample = LAHORE_AREAS.find(a => a.name.includes("Kalma"));
-      document.getElementById('main-location-input').value = sample.name;
-      executeFindNearest(sample.lat, sample.lng, sample.name);
+      if (sample) {
+        document.getElementById('main-location-input').value = sample.name;
+        showNearbyBusRoutes(sample.lat, sample.lng, sample.name);
+      }
     },
     { timeout: 10000 }
   );
@@ -296,47 +473,51 @@ function handleHeaderStopSearch() {
 }
 
 // Location Text Search Handler
-function handleLocationSearch() {
+async function handleLocationSearch() {
   const rawQuery = document.getElementById('main-location-input').value.trim();
   if (!rawQuery) {
-    alert("Please enter your area or stop name (e.g. Wapda Town, Johar Town, Defense, Mughalpura, Islampura)");
+    appState.locationSearchError = 'Location not found. Please enter a valid address or area.';
+    appState.nearbyRouteResults = [];
+    renderResultPage();
+    navigateToPage('result');
     return;
   }
 
-  const query = rawQuery.toLowerCase();
-  const queryNorm = normalizeText(rawQuery);
-
-  // Match against known areas or stops (try exact substring first, then normalized)
-  let matchedArea = LAHORE_AREAS.find(a => a.name.toLowerCase().includes(query));
-  
-  if (!matchedArea) {
-    matchedArea = LAHORE_AREAS.find(a => normalizeText(a.name).includes(queryNorm));
+  const btnFindBus = document.getElementById('btn-find-bus');
+  if (btnFindBus) {
+    btnFindBus.disabled = true;
+    btnFindBus.innerHTML = '<i class="lucide-loader-2 spin"></i> Searching...';
   }
-  
-  if (!matchedArea) {
-    // Search across all route stops (exact substring first)
-    for (let r of UET_DATA.routes) {
-      for (let s of r.stops) {
-        if (s.name.toLowerCase().includes(query) || normalizeText(s.name).includes(queryNorm)) {
-          matchedArea = { name: s.name, lat: s.lat, lng: s.lng };
-          break;
-        }
-      }
-      if (matchedArea) break;
+
+  try {
+    const geocode = await geocodeLocationQuery(rawQuery);
+    if (!geocode) {
+      appState.locationSearchError = 'Location not found. Please enter a valid address or area.';
+      appState.nearbyRouteResults = [];
+      renderResultPage();
+      navigateToPage('result');
+      return;
     }
-  }
 
-  if (matchedArea) {
-    executeFindNearest(matchedArea.lat, matchedArea.lng, matchedArea.name);
-  } else {
-    alert(`No exact match found for "${rawQuery}". Showing closest available stop.`);
-    const defaultArea = LAHORE_AREAS[0];
-    executeFindNearest(defaultArea.lat, defaultArea.lng, rawQuery);
+    showNearbyBusRoutes(geocode.lat, geocode.lng, geocode.formattedAddress || rawQuery);
+  } catch (error) {
+    appState.locationSearchError = 'Location not found. Please enter a valid address or area.';
+    appState.nearbyRouteResults = [];
+    renderResultPage();
+    navigateToPage('result');
+  } finally {
+    if (btnFindBus) {
+      btnFindBus.disabled = false;
+      btnFindBus.innerHTML = '<i class="lucide-search"></i> Find Bus Route';
+    }
   }
 }
 
 // Execute Nearest Stop Search & Display Result
 function executeFindNearest(lat, lng, locationLabel) {
+  appState.nearbyRouteResults = [];
+  appState.locationSearchError = null;
+
   const result = findNearestStop(lat, lng, appState.selectedCampus);
   if (!result) {
     alert("No routes found matching your criteria.");
@@ -438,11 +619,126 @@ function renderHomePage() {
 
 // Render Result Page (Bus Route Finding Result)
 function renderResultPage() {
-  const result = appState.nearestResult;
-  if (!result) return;
-
   const container = document.getElementById('result-content-container');
   if (!container) return;
+
+  if (appState.locationSearchError) {
+    container.innerHTML = `
+      <div class="info-card no-result-box">
+        <div class="no-result-icon"><i class="lucide-map-pin-off"></i></div>
+        <h3>Location not found</h3>
+        <p>${appState.locationSearchError}</p>
+      </div>
+    `;
+    return;
+  }
+
+  if (appState.nearbyRouteResults && appState.nearbyRouteResults.length > 0) {
+    const nearbyResults = appState.nearbyRouteResults;
+    const locationLabel = appState.currentLocation ? appState.currentLocation.name : 'Selected location';
+    const userLat = appState.currentLocation ? appState.currentLocation.lat : nearbyResults[0].route.stops[0].lat;
+    const userLng = appState.currentLocation ? appState.currentLocation.lng : nearbyResults[0].route.stops[0].lng;
+
+    const mapPoints = [
+      { lat: userLat, lng: userLng, title: 'Your Location', popup: `<b>Your Location</b><br>${locationLabel}` },
+      ...nearbyResults.slice(0, 12).map((item) => ({
+        lat: item.stop.lat,
+        lng: item.stop.lng,
+        title: `${item.route.routeNo} - ${item.stop.name}`,
+        popup: `<b>${item.route.routeNo}</b><br>${item.stop.name}<br>Distance: ${item.distanceKm.toFixed(1)} km`
+      }))
+    ];
+
+    container.innerHTML = `
+      <div class="result-hero-box">
+        <div class="nearest-stop-banner">
+          <div class="stop-pin-icon">
+            <i class="lucide-map-pin"></i>
+          </div>
+          <div class="nearest-stop-info" style="flex:1;">
+            <div style="font-size:0.85rem; text-transform:uppercase; font-weight:700; color:var(--text-muted);">
+              Nearby UET Routes for "${locationLabel}"
+            </div>
+            <h2>Available Routes Near Your Location</h2>
+            <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.3rem; flex-wrap:wrap;">
+              <span class="distance-badge"><i class="lucide-route"></i> ${nearbyResults.length} route(s) nearby</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="details-split-grid">
+        <div>
+          <div class="info-card">
+            <div class="info-card-title">
+              <i class="lucide-bus" style="color:var(--primary-light)"></i>
+              <span>Nearby UET Bus Routes</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:0.9rem;">
+              ${nearbyResults.map(({ route, stop, distanceKm }) => `
+                <div style="background:#F8FAFC; border:1px solid var(--border-light); border-radius:var(--radius-md); padding:1rem;">
+                  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+                    <div>
+                      <span class="route-badge">${route.routeNo}</span>
+                      <div style="font-size:1.05rem; font-weight:700; color:var(--primary); margin-top:0.45rem;">${route.name}</div>
+                    </div>
+                    <span class="distance-badge"><i class="lucide-map-pin"></i> ${distanceKm.toFixed(1)} km</span>
+                  </div>
+                  <div style="font-size:0.9rem; color:var(--text-muted); margin-bottom:0.8rem;">
+                    <strong>Nearest Stop:</strong> ${stop.name}
+                  </div>
+                  <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                    <button class="btn-card-primary" onclick="viewRouteDetail('${route.id}')">
+                      <i class="lucide-eye"></i> View Route
+                    </button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="info-card">
+            <div class="info-card-title">
+              <i class="lucide-map" style="color:var(--primary-light)"></i>
+              <span>Nearby Stops Map</span>
+            </div>
+            <div id="result-map" class="map-container"></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    setTimeout(() => {
+      initLeafletMap('result-map', [userLat, userLng], 12, mapPoints);
+    }, 100);
+
+    return;
+  }
+
+  if (appState.nearbyRouteResults && appState.nearbyRouteResults.length === 0) {
+    container.innerHTML = `
+      <div class="info-card no-result-box">
+        <div class="no-result-icon"><i class="lucide-search-x"></i></div>
+        <h3>No UET bus routes found near this location.</h3>
+        <p>Try searching a nearby area or increasing the search radius.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const result = appState.nearestResult;
+  if (!result) {
+    container.innerHTML = `
+      <div class="info-card no-result-box">
+        <div class="no-result-icon"><i class="lucide-search-x"></i></div>
+        <h3>No UET bus routes found near this location.</h3>
+        <p>Try searching a nearby area or increasing the search radius.</p>
+      </div>
+    `;
+    return;
+  }
 
   const { route, stop, stopIndex, distanceKm, userLocationLabel } = result;
   const isFav = appState.favorites.includes(route.id);
@@ -727,6 +1023,31 @@ function renderRoutesPage() {
       }
     }, 100);
   }
+}
+
+function initLeafletMap(containerId, centerCoords, zoomLevel, points) {
+  const container = document.getElementById(containerId);
+  if (!container || typeof L === 'undefined') {
+    return;
+  }
+
+  if (window.__uetMapInstance) {
+    window.__uetMapInstance.remove();
+  }
+
+  const map = L.map(containerId).setView(centerCoords, zoomLevel);
+  window.__uetMapInstance = map;
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  points.forEach(point => {
+    const marker = L.marker([point.lat, point.lng]).addTo(map);
+    if (point.title) {
+      marker.bindPopup(point.popup || point.title);
+    }
+  });
 }
 
 // View specific route detail (scroll or navigate)
