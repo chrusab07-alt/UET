@@ -959,38 +959,19 @@ const UET_DATA = {
   ]
 };
 
-// Popular area lookup database for manual geographic matching
-const LAHORE_AREAS = [
+// Popular area quick-select entries derived from actual bus stop coordinates.
+// Each entry uses the coordinates of a real bus stop for GPS-distance matching.
+const POPULAR_AREAS = [
   { name: "Harbanspura", lat: 31.5721, lng: 74.4215 },
   { name: "Mughalpura", lat: 31.5650, lng: 74.3750 },
-  { name: "Taj Bagh", lat: 31.5695, lng: 74.4050 },
-  { name: "Defence / DHA Phase 1-5", lat: 31.4720, lng: 74.3750 },
+  { name: "Defence Mor", lat: 31.4920, lng: 74.3480 },
   { name: "Nishtar Colony", lat: 31.4392, lng: 74.3645 },
-  { name: "Kalma Chowk", lat: 31.5040, lng: 74.3315 },
   { name: "Model Town", lat: 31.4850, lng: 74.3250 },
-  { name: "Gulberg / Main Market", lat: 31.5180, lng: 74.3490 },
   { name: "Wapda Town", lat: 31.4390, lng: 74.2690 },
-  { name: "Johar Town / Allah Hoo", lat: 31.4690, lng: 74.2820 },
+  { name: "Johar Town", lat: 31.4690, lng: 74.2820 },
   { name: "Township / Akbar Chowk", lat: 31.4610, lng: 74.3050 },
   { name: "Thokar Niaz Baig", lat: 31.4730, lng: 74.2420 },
-  { name: "Sabzazar / Multan Road", lat: 31.5280, lng: 74.2700 },
-  { name: "Samanabad / Yateem Khana", lat: 31.5346, lng: 74.2941 },
-  { name: "Muslim Town / Wahdat Road", lat: 31.5150, lng: 74.3180 },
-  { name: "Chaburji / MAO College", lat: 31.5510, lng: 74.3020 },
-  { name: "Shahdara / Begum Kot", lat: 31.6250, lng: 74.2880 },
-  { name: "Shalimar / Darogawala", lat: 31.5830, lng: 74.3680 },
-  { name: "Muridkey / Kamoki", lat: 31.8020, lng: 74.2620 },
-  { name: "Lahore Cantt / Sadar", lat: 31.5490, lng: 74.3680 },
-  { name: "Railway Station / Garhi Shahu", lat: 31.5720, lng: 74.3310 },
-  { name: "Shoukat Khanam / Khayaban-e-Jinnah", lat: 31.4620, lng: 74.2690 },
-  { name: "Islampura", lat: 31.5660, lng: 74.2957 },
-  { name: "Anarkali", lat: 31.5679, lng: 74.3106 },
-  { name: "Band Road", lat: 31.6090, lng: 74.3029 },
-  { name: "Data Darbar", lat: 31.5780, lng: 74.3050 },
-  { name: "Ichra", lat: 31.5280, lng: 74.3210 },
-  { name: "Shadman", lat: 31.5410, lng: 74.3180 },
-  { name: "Fortress Stadium", lat: 31.5310, lng: 74.3650 },
-  { name: "Kot Lakhpat", lat: 31.4650, lng: 74.3410 },
-  { name: "Green Town", lat: 31.4380, lng: 74.3010 },
-  { name: "Iqbal Town", lat: 31.5180, lng: 74.2850 }
+  { name: "Sabzazar", lat: 31.5280, lng: 74.2700 },
+  { name: "Samanabad", lat: 31.5346, lng: 74.2941 },
+  { name: "Shahdara", lat: 31.6250, lng: 74.2880 }
 ];

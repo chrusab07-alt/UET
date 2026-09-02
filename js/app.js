@@ -3,11 +3,10 @@
 let appState = {
   selectedCampus: 'ksk', // 'ksk' or 'main'
   currentLocation: null, // { lat, lng, name }
-  nearestResult: null,
-  nearbyRouteResults: [],
+  recommendationResults: null, // { status: 'within_500m' | 'nearest' | 'none', matchingRoutes, allNearby, userLat, userLng, locationLabel }
+  activeRecommendationIndex: 0,
   locationSearchError: null,
   activePage: 'home',
-  searchQuery: '',
   routeScheduleQuery: '',
   favorites: JSON.parse(localStorage.getItem('uet_fav_routes') || '[]'),
   selectedRouteId: null,
@@ -30,7 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
   handleUrlRouting();
 });
 
-// Calculate Haversine Distance (in kilometers)
+// Calculate Haversine Distance (in kilometers) between two GPS points
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // Earth radius in km
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -41,6 +40,104 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
     Math.sin(dLon/2) * Math.sin(dLon/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
+}
+
+/**
+ * GPS Distance-Based Route Recommendation Algorithm
+ * 
+ * Rules:
+ * 1. Calculates Haversine distance from user's GPS coordinates to EVERY bus stop.
+ * 2. Finds the nearest pickup stop for each route.
+ * 3. If multiple stops are within 500 meters (0.5 km), returns all matching routes sorted by distance.
+ * 4. If no stops within 500m, but stops exist within 5 km, recommends the route belonging to the nearest stop.
+ * 5. If no stop is found within 5 km, returns status: 'none' -> "No nearby UET bus stop found."
+ * 6. Never guesses using locality strings or text matching.
+ */
+function findBusRoutesByGps(userLat, userLng) {
+  const MAX_RADIUS_KM = 5.0;     // 5 km max radius
+  const NEARBY_THRESHOLD_KM = 0.5; // 500 meters threshold
+
+  const routeCandidates = [];
+
+  UET_DATA.routes.forEach(route => {
+    let closestStop = null;
+    let minDistanceKm = Infinity;
+    let closestStopIndex = -1;
+
+    // Check every stop in the route
+    route.stops.forEach((stop, index) => {
+      // Exclude final campus destination stop if it's the terminal destination
+      if (index === route.stops.length - 1 && route.stops.length > 1) {
+        return;
+      }
+
+      const dist = calculateDistance(userLat, userLng, stop.lat, stop.lng);
+      if (dist < minDistanceKm) {
+        minDistanceKm = dist;
+        closestStop = stop;
+        closestStopIndex = index;
+      }
+    });
+
+    if (closestStop && minDistanceKm <= MAX_RADIUS_KM) {
+      routeCandidates.push({
+        route: route,
+        stop: closestStop,
+        stopIndex: closestStopIndex,
+        distanceKm: minDistanceKm
+      });
+    }
+  });
+
+  // Sort by nearest distance ascending
+  routeCandidates.sort((a, b) => a.distanceKm - b.distanceKm);
+
+  if (routeCandidates.length === 0) {
+    return {
+      status: 'none',
+      matchingRoutes: [],
+      allNearby: []
+    };
+  }
+
+  // Filter routes within 500 meters
+  const within500m = routeCandidates.filter(item => item.distanceKm <= NEARBY_THRESHOLD_KM);
+
+  if (within500m.length > 0) {
+    return {
+      status: 'within_500m',
+      matchingRoutes: within500m,
+      allNearby: routeCandidates
+    };
+  }
+
+  // Fallback: nearest stop within 5 km
+  return {
+    status: 'nearest',
+    matchingRoutes: [routeCandidates[0]],
+    allNearby: routeCandidates
+  };
+}
+
+function recommendRoutesByGps(userLat, userLng, locationLabel) {
+  const result = findBusRoutesByGps(userLat, userLng);
+
+  appState.currentLocation = {
+    lat: userLat,
+    lng: userLng,
+    name: locationLabel
+  };
+  appState.locationSearchError = null;
+  appState.activeRecommendationIndex = 0;
+  appState.recommendationResults = {
+    ...result,
+    userLat: userLat,
+    userLng: userLng,
+    locationLabel: locationLabel
+  };
+
+  renderResultPage();
+  navigateToPage('result');
 }
 
 function loadGoogleMapsApi() {
@@ -89,8 +186,8 @@ function initGoogleLocationSearch() {
     const place = autocomplete.getPlace();
     const loc = place && place.geometry && place.geometry.location;
     if (!loc) {
-      appState.locationSearchError = 'Location not found. Please enter a valid address or area.';
-      appState.nearbyRouteResults = [];
+      appState.locationSearchError = 'Location coordinates not found. Please select a valid location from the suggestions or use "Detect My Area".';
+      appState.recommendationResults = null;
       renderResultPage();
       navigateToPage('result');
       return;
@@ -99,7 +196,7 @@ function initGoogleLocationSearch() {
     const lat = loc.lat();
     const lng = loc.lng();
     const label = place.formatted_address || input.value.trim();
-    showNearbyBusRoutes(lat, lng, label);
+    recommendRoutesByGps(lat, lng, label);
   });
 
   input.dataset.googleAutocompleteBound = 'true';
@@ -114,7 +211,7 @@ async function geocodeLocationQuery(query) {
   const apiKey = getGoogleMapsApiKey();
   if (apiKey) {
     try {
-      const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(trimmed)}&key=${apiKey}`);
+      const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(trimmed + ', Lahore, Pakistan')}&key=${apiKey}`);
       const data = await response.json();
       const result = data && data.results && data.results[0];
       if (data.status === 'OK' && result && result.geometry && result.geometry.location) {
@@ -129,118 +226,17 @@ async function geocodeLocationQuery(query) {
     }
   }
 
-  const normalizedQuery = normalizeText(trimmed).toLowerCase();
-  const ignoredWords = new Set(['a', 'an', 'the', 'is', 'this', 'that', 'for', 'in', 'on', 'at', 'near', 'of', 'my', 'your', 'city', 'area', 'place', 'lahore', 'lhr', 'pakistan']);
-  const queryWords = (trimmed.toLowerCase().match(/[a-z0-9]+/g) || [])
-    .map(w => normalizeText(w))
-    .filter(w => w.length > 2 && !ignoredWords.has(w));
-
-  const fallbackMatch = LAHORE_AREAS.find(area => {
-    const normalizedArea = normalizeText(area.name).toLowerCase();
-    if (normalizedArea.includes(normalizedQuery) || normalizedQuery.includes(normalizedArea)) {
-      return true;
-    }
-
-    const areaWords = (area.name.toLowerCase().match(/[a-z0-9]+/g) || []).map(w => normalizeText(w));
-    if (!areaWords.length || !queryWords.length) {
-      return false;
-    }
-
-    const overlap = queryWords.filter(word => areaWords.includes(word) || normalizedArea.includes(word)).length;
-    return overlap >= Math.min(2, Math.max(1, queryWords.length - 1));
-  });
-
-  if (!fallbackMatch) {
-    return null;
+  // Exact match on predefined popular area coordinates only
+  const exactArea = POPULAR_AREAS.find(a => a.name.toLowerCase() === trimmed.toLowerCase());
+  if (exactArea) {
+    return {
+      lat: exactArea.lat,
+      lng: exactArea.lng,
+      formattedAddress: exactArea.name
+    };
   }
 
-  return {
-    lat: fallbackMatch.lat,
-    lng: fallbackMatch.lng,
-    formattedAddress: fallbackMatch.name
-  };
-}
-
-function buildNearbyRouteResults(userLat, userLng, radiusKm = 3, campusFilter = null) {
-  const candidateRoutes = campusFilter
-    ? UET_DATA.routes.filter(route => route.campusId === campusFilter)
-    : UET_DATA.routes;
-
-  const routeMap = new Map();
-
-  candidateRoutes.forEach(route => {
-    let bestNearbyStop = null;
-    let bestDistanceKm = Infinity;
-
-    route.stops.forEach(stop => {
-      const distanceKm = calculateDistance(userLat, userLng, stop.lat, stop.lng);
-      if (distanceKm <= radiusKm && distanceKm < bestDistanceKm) {
-        bestNearbyStop = stop;
-        bestDistanceKm = distanceKm;
-      }
-    });
-
-    if (bestNearbyStop) {
-      routeMap.set(route.id, {
-        route,
-        stop: bestNearbyStop,
-        distanceKm: bestDistanceKm
-      });
-    }
-  });
-
-  return Array.from(routeMap.values())
-    .sort((a, b) => a.distanceKm - b.distanceKm);
-}
-
-function buildNearbyStopSuggestions(userLat, userLng, maxDistanceKm = 1.5, campusFilter = null) {
-  const candidateRoutes = campusFilter
-    ? UET_DATA.routes.filter(route => route.campusId === campusFilter)
-    : UET_DATA.routes;
-
-  const stopMap = new Map();
-
-  candidateRoutes.forEach(route => {
-    route.stops.forEach(stop => {
-      const distanceKm = calculateDistance(userLat, userLng, stop.lat, stop.lng);
-      if (distanceKm <= maxDistanceKm) {
-        const key = `${route.id}:${stop.name}`;
-        if (!stopMap.has(key)) {
-          stopMap.set(key, {
-            route,
-            stop,
-            distanceKm
-          });
-        }
-      }
-    });
-  });
-
-  return Array.from(stopMap.values())
-    .sort((a, b) => a.distanceKm - b.distanceKm);
-}
-
-function showNearbyBusRoutes(lat, lng, locationLabel, radiusKm = 3) {
-  const nearbyRoutes = buildNearbyRouteResults(lat, lng, radiusKm, appState.selectedCampus);
-  appState.nearbyRouteResults = nearbyRoutes;
-  appState.locationSearchError = null;
-  appState.nearestResult = null;
-
-  if (nearbyRoutes.length === 0) {
-    appState.nearbyRouteResults = [];
-    renderResultPage();
-    navigateToPage('result');
-    return;
-  }
-
-  appState.currentLocation = {
-    lat,
-    lng,
-    name: locationLabel
-  };
-
-  renderResultPage();
-  navigateToPage('result');
+  return null;
 }
 
 function getDisplayDriverPhone(route) {
@@ -249,50 +245,6 @@ function getDisplayDriverPhone(route) {
 
 function getDisplayVehicleNo(route) {
   return route && route.campusId === 'main' ? 'N/A' : (route?.vehicleNo || 'N/A');
-}
-
-function getNearestStopCandidate(routes, userLat, userLng) {
-  let minDistance = Infinity;
-  let bestMatch = null;
-
-  routes.forEach(route => {
-    route.stops.forEach((stop, index) => {
-      if (index === route.stops.length - 1) return;
-
-      const dist = calculateDistance(userLat, userLng, stop.lat, stop.lng);
-      if (dist < minDistance) {
-        minDistance = dist;
-        bestMatch = {
-          route: route,
-          stop: stop,
-          stopIndex: index,
-          distanceKm: dist
-        };
-      }
-    });
-  });
-
-  return bestMatch;
-}
-
-// Find Nearest Stop across selected campus routes (or all routes)
-function findNearestStop(userLat, userLng, targetCampusId = null) {
-  const candidateRoutes = UET_DATA.routes.filter(r => 
-    !targetCampusId || targetCampusId === 'all' || r.campusId === targetCampusId
-  );
-
-  const campusBestMatch = getNearestStopCandidate(candidateRoutes, userLat, userLng);
-
-  if (!targetCampusId || targetCampusId === 'all' || !campusBestMatch) {
-    return campusBestMatch;
-  }
-
-  if (campusBestMatch.distanceKm <= 7) {
-    return campusBestMatch;
-  }
-
-  const fallbackBestMatch = getNearestStopCandidate(UET_DATA.routes, userLat, userLng);
-  return fallbackBestMatch && fallbackBestMatch.distanceKm < campusBestMatch.distanceKm ? fallbackBestMatch : campusBestMatch;
 }
 
 function setSelectedCampus(campusId) {
@@ -424,47 +376,42 @@ function initUIEvents() {
   });
 }
 
-// Geolocation Handler
+// Geolocation Handler - Uses pure browser Geolocation API coordinates
 function detectUserGeolocation() {
   const btnLocate = document.getElementById('btn-locate-me');
   if (!navigator.geolocation) {
-    alert("Geolocation is not supported by your browser. Please select or search your area manually.");
+    alert("Geolocation is not supported by your browser. Please select a popular area.");
     return;
   }
 
   btnLocate.innerHTML = `<i class="lucide-loader-2 spin"></i> Locating...`;
-  
+  btnLocate.disabled = true;
+
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       btnLocate.innerHTML = `<i class="lucide-crosshair"></i> Detect My Area`;
+      btnLocate.disabled = false;
       const userLat = pos.coords.latitude;
       const userLng = pos.coords.longitude;
-      
-      appState.currentLocation = {
-        lat: userLat,
-        lng: userLng,
-        name: "Your Current GPS Location"
-      };
 
-      document.getElementById('main-location-input').value = "GPS: Current Location";
-      showNearbyBusRoutes(userLat, userLng, "Your Current Location");
+      const input = document.getElementById('main-location-input');
+      if (input) {
+        input.value = `GPS (${userLat.toFixed(4)}, ${userLng.toFixed(4)})`;
+      }
+
+      recommendRoutesByGps(userLat, userLng, "Your Current GPS Location");
     },
     (err) => {
       btnLocate.innerHTML = `<i class="lucide-crosshair"></i> Detect My Area`;
-      console.warn("GPS error/denied. Using sample Lahore area coordinates.");
-      const sample = LAHORE_AREAS.find(a => a.name.includes("Kalma"));
-      if (sample) {
-        document.getElementById('main-location-input').value = sample.name;
-        showNearbyBusRoutes(sample.lat, sample.lng, sample.name);
-      }
+      btnLocate.disabled = false;
+      console.error("GPS detection error:", err);
+      appState.locationSearchError = "Could not retrieve your GPS location. Please allow location access in your browser or choose a popular area below.";
+      appState.recommendationResults = null;
+      renderResultPage();
+      navigateToPage('result');
     },
-    { timeout: 10000 }
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
   );
-}
-
-// Normalize text for fuzzy matching (remove spaces, dashes, dots for comparison)
-function normalizeText(text) {
-  return text.toLowerCase().replace(/[\s\-\.\/,]+/g, '');
 }
 
 function normalizeStopSearchText(value) {
@@ -524,12 +471,12 @@ function handleHeaderStopSearch() {
   }, 100);
 }
 
-// Location Text Search Handler
+// Location Text Search Handler - Geocodes to lat/lng then runs GPS distance algorithm
 async function handleLocationSearch() {
   const rawQuery = document.getElementById('main-location-input').value.trim();
   if (!rawQuery) {
-    appState.locationSearchError = 'Location not found. Please enter a valid address or area.';
-    appState.nearbyRouteResults = [];
+    appState.locationSearchError = 'Please enter a location or click "Detect My Area" to use GPS coordinates.';
+    appState.recommendationResults = null;
     renderResultPage();
     navigateToPage('result');
     return;
@@ -544,17 +491,17 @@ async function handleLocationSearch() {
   try {
     const geocode = await geocodeLocationQuery(rawQuery);
     if (!geocode) {
-      appState.locationSearchError = 'Location not found. Please enter a valid address or area.';
-      appState.nearbyRouteResults = [];
+      appState.locationSearchError = `Location not recognized. Please click "Detect My Area" to use your GPS location or pick a popular area below.`;
+      appState.recommendationResults = null;
       renderResultPage();
       navigateToPage('result');
       return;
     }
 
-    showNearbyBusRoutes(geocode.lat, geocode.lng, geocode.formattedAddress || rawQuery);
+    recommendRoutesByGps(geocode.lat, geocode.lng, geocode.formattedAddress || rawQuery);
   } catch (error) {
-    appState.locationSearchError = 'Location not found. Please enter a valid address or area.';
-    appState.nearbyRouteResults = [];
+    appState.locationSearchError = 'Location lookup failed. Please click "Detect My Area" to use your GPS location.';
+    appState.recommendationResults = null;
     renderResultPage();
     navigateToPage('result');
   } finally {
@@ -565,34 +512,13 @@ async function handleLocationSearch() {
   }
 }
 
-// Execute Nearest Stop Search & Display Result
-function executeFindNearest(lat, lng, locationLabel) {
-  appState.nearbyRouteResults = [];
-  appState.locationSearchError = null;
-
-  const result = findNearestStop(lat, lng, appState.selectedCampus);
-  if (!result) {
-    alert("No routes found matching your criteria.");
-    return;
-  }
-
-  appState.nearestResult = {
-    ...result,
-    userLocationLabel: locationLabel,
-    userLat: lat,
-    userLng: lng
-  };
-
-  renderResultPage();
-  navigateToPage('result');
-}
-
-// Quick Chip Select
+// Quick Chip Select - passes coordinates into pure GPS distance algorithm
 function selectAreaChip(areaName) {
-  const area = LAHORE_AREAS.find(a => a.name === areaName);
+  const area = POPULAR_AREAS.find(a => a.name === areaName);
   if (area) {
-    document.getElementById('main-location-input').value = area.name;
-    executeFindNearest(area.lat, area.lng, area.name);
+    const input = document.getElementById('main-location-input');
+    if (input) input.value = area.name;
+    recommendRoutesByGps(area.lat, area.lng, area.name);
   }
 }
 
@@ -657,19 +583,25 @@ function renderHomePage() {
 
   routesGrid.innerHTML = html;
 
-  // Render Area Chips
+  // Render Popular Area Chips
   const chipsContainer = document.getElementById('area-chips-wrapper');
-  if (chipsContainer) {
+  if (chipsContainer && typeof POPULAR_AREAS !== 'undefined') {
     chipsContainer.innerHTML = `
       <span class="quick-chip-title"><i class="lucide-sparkles"></i> Popular Areas:</span>
-      ${LAHORE_AREAS.slice(0, 12).map(a => `
+      ${POPULAR_AREAS.map(a => `
         <button class="area-chip" onclick="selectAreaChip('${a.name}')">${a.name}</button>
       `).join('')}
     `;
   }
 }
 
-// Render Result Page (Bus Route Finding Result)
+// Switch active recommendation when multiple routes are found
+function selectActiveRecommendation(index) {
+  appState.activeRecommendationIndex = index;
+  renderResultPage();
+}
+
+// Render Result Page (GPS-based Bus Route Recommendation Result)
 function renderResultPage() {
   const container = document.getElementById('result-content-container');
   if (!container) return;
@@ -680,165 +612,48 @@ function renderResultPage() {
         <div class="no-result-icon"><i class="lucide-map-pin-off"></i></div>
         <h3>Location not found</h3>
         <p>${appState.locationSearchError}</p>
+        <div style="margin-top:1.5rem;">
+          <button class="btn-find-bus" style="margin:0 auto;" onclick="detectUserGeolocation()">
+            <i class="lucide-crosshair"></i> Use GPS Location
+          </button>
+        </div>
       </div>
     `;
     return;
   }
 
-  if (appState.nearbyRouteResults && appState.nearbyRouteResults.length > 0) {
-    const nearbyResults = appState.nearbyRouteResults;
-    const locationLabel = appState.currentLocation ? appState.currentLocation.name : 'Selected location';
-    const userLat = appState.currentLocation ? appState.currentLocation.lat : nearbyResults[0].route.stops[0].lat;
-    const userLng = appState.currentLocation ? appState.currentLocation.lng : nearbyResults[0].route.stops[0].lng;
-    const nearbyStops = buildNearbyStopSuggestions(userLat, userLng, 1.5, appState.selectedCampus);
-    const yourStops = nearbyStops.filter(item => item.distanceKm <= 0.5);
-    const suggestedStops = nearbyStops.filter(item => item.distanceKm > 0.5 && item.distanceKm <= 1.5);
-
-    const mapPoints = [
-      { lat: userLat, lng: userLng, title: 'Your Location', popup: `<b>Your Location</b><br>${locationLabel}` },
-      ...nearbyResults.slice(0, 12).map((item) => ({
-        lat: item.stop.lat,
-        lng: item.stop.lng,
-        title: `${item.route.routeNo} - ${item.stop.name}`,
-        popup: `<b>${item.route.routeNo}</b><br>${item.stop.name}<br>Distance: ${item.distanceKm.toFixed(1)} km`
-      }))
-    ];
-
-    const renderStopList = (items, title, emptyText) => {
-      if (!items.length) {
-        return `
-          <div class="info-card" style="margin-bottom:1rem;">
-            <div class="info-card-title">
-              <i class="lucide-map-pin" style="color:var(--primary-light)"></i>
-              <span>${title}</span>
-            </div>
-            <div style="color:var(--text-muted); padding:0.5rem 0;">${emptyText}</div>
-          </div>
-        `;
-      }
-
-      return `
-        <div class="info-card" style="margin-bottom:1rem;">
-          <div class="info-card-title">
-            <i class="lucide-map-pin" style="color:var(--primary-light)"></i>
-            <span>${title}</span>
-          </div>
-          <div style="display:flex; flex-direction:column; gap:0.75rem;">
-            ${items.map(({ route, stop, distanceKm }) => `
-              <div style="background:#F8FAFC; border:1px solid var(--border-light); border-radius:var(--radius-md); padding:0.85rem 1rem;">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap;">
-                  <div>
-                    <span class="route-badge">${route.routeNo}</span>
-                    <div style="font-size:1rem; font-weight:700; color:var(--primary); margin-top:0.4rem;">${stop.name}</div>
-                  </div>
-                  <span class="distance-badge"><i class="lucide-map-pin"></i> ${distanceKm.toFixed(1)} km</span>
-                </div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
-    };
-
-    container.innerHTML = `
-      <div class="result-hero-box">
-        <div class="nearest-stop-banner">
-          <div class="stop-pin-icon">
-            <i class="lucide-map-pin"></i>
-          </div>
-          <div class="nearest-stop-info" style="flex:1;">
-            <div style="font-size:0.85rem; text-transform:uppercase; font-weight:700; color:var(--text-muted);">
-              Nearby UET Routes for "${locationLabel}"
-            </div>
-            <h2>Available Routes Near Your Location</h2>
-            <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.3rem; flex-wrap:wrap;">
-              <span class="distance-badge"><i class="lucide-route"></i> ${nearbyResults.length} route(s) nearby</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="details-split-grid">
-        <div>
-          ${renderStopList(yourStops, 'Your Stop', 'No stop found within 0.5 km of your location.')}
-          ${renderStopList(suggestedStops, 'Other Suggested Stops', 'No additional nearby stops between 0.5 km and 1.5 km.')}
-
-          <div class="info-card">
-            <div class="info-card-title">
-              <i class="lucide-bus" style="color:var(--primary-light)"></i>
-              <span>Nearby UET Bus Routes</span>
-            </div>
-            <div style="display:flex; flex-direction:column; gap:0.9rem;">
-              ${nearbyResults.map(({ route, stop, distanceKm }) => `
-                <div style="background:#F8FAFC; border:1px solid var(--border-light); border-radius:var(--radius-md); padding:1rem;">
-                  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.5rem;">
-                    <div>
-                      <span class="route-badge">${route.routeNo}</span>
-                      <div style="font-size:1.05rem; font-weight:700; color:var(--primary); margin-top:0.45rem;">${route.name}</div>
-                    </div>
-                    <span class="distance-badge"><i class="lucide-map-pin"></i> ${distanceKm.toFixed(1)} km</span>
-                  </div>
-                  <div style="font-size:0.9rem; color:var(--text-muted); margin-bottom:0.8rem;">
-                    <strong>Nearest Stop:</strong> ${stop.name}
-                  </div>
-                  <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                    <button class="btn-card-primary" onclick="viewRouteDetail('${route.id}')">
-                      <i class="lucide-eye"></i> View Route
-                    </button>
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <div class="info-card">
-            <div class="info-card-title">
-              <i class="lucide-map" style="color:var(--primary-light)"></i>
-              <span>Nearby Stops Map</span>
-            </div>
-            <div id="result-map" class="map-container"></div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    setTimeout(() => {
-      initLeafletMap('result-map', [userLat, userLng], 12, mapPoints);
-    }, 100);
-
-    return;
-  }
-
-  if (appState.nearbyRouteResults && appState.nearbyRouteResults.length === 0) {
+  const rec = appState.recommendationResults;
+  if (!rec || rec.status === 'none' || !rec.matchingRoutes || rec.matchingRoutes.length === 0) {
     container.innerHTML = `
       <div class="info-card no-result-box">
         <div class="no-result-icon"><i class="lucide-search-x"></i></div>
-        <h3>No UET bus routes found near this location.</h3>
-        <p>Try searching a nearby area or increasing the search radius.</p>
+        <h3>No nearby UET bus stop found.</h3>
+        <p>No official UET bus stop was found within 5 km of your location.</p>
+        <div style="margin-top:1.5rem; display:flex; gap:0.75rem; justify-content:center; flex-wrap:wrap;">
+          <button class="btn-find-bus" onclick="detectUserGeolocation()">
+            <i class="lucide-crosshair"></i> Retry GPS
+          </button>
+          <button class="btn-secondary" onclick="navigateToPage('routes')">
+            <i class="lucide-route"></i> Browse All Routes
+          </button>
+        </div>
       </div>
     `;
     return;
   }
 
-  const result = appState.nearestResult;
-  if (!result) {
-    container.innerHTML = `
-      <div class="info-card no-result-box">
-        <div class="no-result-icon"><i class="lucide-search-x"></i></div>
-        <h3>No UET bus routes found near this location.</h3>
-        <p>Try searching a nearby area or increasing the search radius.</p>
-      </div>
-    `;
-    return;
-  }
-
-  const { route, stop, stopIndex, distanceKm, userLocationLabel } = result;
+  const activeIdx = appState.activeRecommendationIndex || 0;
+  const primaryItem = rec.matchingRoutes[activeIdx] || rec.matchingRoutes[0];
+  const { route, stop, stopIndex, distanceKm } = primaryItem;
   const isFav = appState.favorites.includes(route.id);
-  const formattedDist = distanceKm < 1 ? `${Math.round(distanceKm * 1000)} meters` : `${distanceKm.toFixed(1)} km`;
-  const estimatedWalk = Math.max(2, Math.round(distanceKm * 12));
+  const formattedDist = distanceKm < 1 ? `${Math.round(distanceKm * 1000)} meters` : `${distanceKm.toFixed(2)} km`;
+  const estimatedWalk = Math.max(1, Math.round(distanceKm * 12));
+  const userLocationLabel = rec.locationLabel || "Your Location";
+  const userLat = rec.userLat;
+  const userLng = rec.userLng;
+  const campusLabel = route.campusId === 'ksk' ? 'KSK New Campus' : 'Main Campus';
 
+  // Build complete route stops timeline
   let timelineHtml = '';
   route.stops.forEach((s, idx) => {
     let typeClass = '';
@@ -846,20 +661,20 @@ function renderResultPage() {
 
     if (idx === 0) {
       typeClass = 'origin';
-      badgeText = 'Morning Start Point';
+      badgeText = 'Morning Origin';
     } else if (idx === route.stops.length - 1) {
       typeClass = 'destination';
       badgeText = 'Campus Arrival';
     } else if (idx === stopIndex) {
       typeClass = 'nearest';
-      badgeText = 'Recommended Pickup';
+      badgeText = 'Nearest Pickup Stop';
     }
 
     timelineHtml += `
       <div class="timeline-item ${typeClass}">
         <div>
           <div class="timeline-name">
-            ${s.name} ${badgeText ? `<span class="campus-chip" style="margin-left:0.5rem; background:${idx === stopIndex ? 'var(--accent)' : ''}; color:${idx === stopIndex ? 'var(--primary-dark)' : ''}">${badgeText}</span>` : ''}
+            ${s.name} ${badgeText ? `<span class="campus-chip" style="margin-left:0.5rem; background:${idx === stopIndex ? 'var(--accent)' : ''}; color:${idx === stopIndex ? 'var(--primary-dark)' : ''}; font-weight:700;">${badgeText}</span>` : ''}
           </div>
           <div style="font-size:0.8rem; color:var(--text-muted);">Stop #${idx + 1}</div>
         </div>
@@ -868,7 +683,89 @@ function renderResultPage() {
     `;
   });
 
+  // If multiple routes within 500m (or multiple nearby routes)
+  const isMultiMatch = rec.matchingRoutes.length > 1;
+  let multiRouteSelectorHtml = '';
+  if (isMultiMatch) {
+    multiRouteSelectorHtml = `
+      <div class="info-card" style="margin-bottom:1.25rem;">
+        <div class="info-card-title">
+          <i class="lucide-route" style="color:var(--primary-light)"></i>
+          <span>Multiple Matching Routes Within 500 Meters (${rec.matchingRoutes.length} Found)</span>
+        </div>
+        <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1rem;">
+          The following UET bus routes have pickup stops within 500 meters of your GPS location, sorted by distance:
+        </p>
+        <div style="display:flex; flex-direction:column; gap:0.6rem;">
+          ${rec.matchingRoutes.map((item, i) => {
+            const isSelected = i === activeIdx;
+            const distStr = item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)}m` : `${item.distanceKm.toFixed(2)} km`;
+            return `
+              <div onclick="selectActiveRecommendation(${i})" style="cursor:pointer; background:${isSelected ? '#EFF6FF' : '#F8FAFC'}; border:2px solid ${isSelected ? 'var(--primary-light)' : 'var(--border-light)'}; border-radius:var(--radius-md); padding:0.85rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; transition:var(--transition-fast);">
+                <div style="display:flex; align-items:center; gap:0.75rem;">
+                  <span class="route-badge">${item.route.routeNo}</span>
+                  <div>
+                    <div style="font-weight:700; color:var(--primary); font-size:0.95rem;">${item.route.name}</div>
+                    <div style="font-size:0.82rem; color:var(--text-muted);">
+                      Nearest Stop: <strong>${item.stop.name}</strong> (${item.stop.time}) &bull; ${item.route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}
+                    </div>
+                  </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                  <span class="distance-badge"><i class="lucide-map-pin"></i> ${distStr} away</span>
+                  <span style="font-size:0.8rem; font-weight:600; color:${isSelected ? 'var(--primary-light)' : 'var(--text-muted)'};">${isSelected ? '✓ Selected' : 'View Details'}</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // Other nearby routes within 5 km (if any exist beyond the primary/within 500m group)
+  const otherNearby = rec.allNearby.filter(item => !rec.matchingRoutes.some(m => m.route.id === item.route.id)).slice(0, 4);
+  let otherNearbyHtml = '';
+  if (otherNearby.length > 0) {
+    otherNearbyHtml = `
+      <div class="info-card" style="margin-top:1.25rem;">
+        <div class="info-card-title">
+          <i class="lucide-compass" style="color:var(--primary-light)"></i>
+          <span>Other Nearby Routes (Within 5 km)</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:0.6rem;">
+          ${otherNearby.map((item) => {
+            const distStr = item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)}m` : `${item.distanceKm.toFixed(2)} km`;
+            return `
+              <div style="background:#F8FAFC; border:1px solid var(--border-light); border-radius:var(--radius-md); padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                <div>
+                  <span class="route-badge" style="font-size:0.78rem; padding:0.2rem 0.5rem;">${item.route.routeNo}</span>
+                  <strong style="margin-left:0.4rem; color:var(--primary); font-size:0.9rem;">${item.stop.name}</strong>
+                  <span style="font-size:0.8rem; color:var(--text-muted); margin-left:0.4rem;">(${item.stop.time})</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                  <span class="distance-badge"><i class="lucide-map-pin"></i> ${distStr}</span>
+                  <button class="btn-card-primary" style="padding:0.3rem 0.6rem; font-size:0.78rem;" onclick="viewRouteDetail('${item.route.id}')">
+                    View
+                  </button>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // Map markers for Leaflet
+  const mapPoints = [
+    { lat: userLat, lng: userLng, title: 'Your GPS Location', popup: `<b>Your GPS Location</b><br>${userLocationLabel}` },
+    { lat: stop.lat, lng: stop.lng, title: `Pickup: ${stop.name}`, popup: `<b>${route.routeNo} - ${stop.name}</b><br>Pickup Time: ${stop.time}<br>Distance: ${formattedDist}` },
+    { lat: route.stops[route.stops.length - 1].lat, lng: route.stops[route.stops.length - 1].lng, title: 'Campus Destination', popup: `<b>${route.stops[route.stops.length - 1].name}</b>` }
+  ];
+
   container.innerHTML = `
+    <!-- Hero Recommendation Banner -->
     <div class="result-hero-box">
       <div class="nearest-stop-banner">
         <div class="stop-pin-icon">
@@ -876,45 +773,52 @@ function renderResultPage() {
         </div>
         <div class="nearest-stop-info" style="flex:1;">
           <div style="font-size:0.85rem; text-transform:uppercase; font-weight:700; color:var(--text-muted);">
-            Nearest Morning Pickup Stop for "${userLocationLabel}"
+            Recommended Bus Stop for ${userLocationLabel}
           </div>
           <h2>${stop.name}</h2>
           <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.3rem; flex-wrap:wrap;">
+            <span class="route-badge" style="font-size:0.95rem;">${route.routeNo}</span>
             <span class="distance-badge"><i class="lucide-map-pin"></i> ${formattedDist} away</span>
             <span style="font-size:0.85rem; color:var(--text-muted);"><i class="lucide-footprints"></i> ~${estimatedWalk} mins walk</span>
-            <span style="font-size:0.85rem; color:var(--text-muted);"><i class="lucide-clock"></i> Pickup: <strong>${stop.time}</strong></span>
+            <span style="font-size:0.85rem; color:var(--text-muted);"><i class="lucide-clock"></i> Pickup Time: <strong>${stop.time}</strong></span>
+            <span class="campus-chip">${campusLabel}</span>
           </div>
         </div>
         <div>
           <button class="btn-accent" onclick="openGoogleMapsDirections(${stop.lat}, ${stop.lng}, '${encodeURIComponent(stop.name)}')">
-            <i class="lucide-navigation"></i> Navigate to Pickup Stop
+            <i class="lucide-navigation"></i> Directions to Stop
           </button>
         </div>
       </div>
     </div>
 
+    ${multiRouteSelectorHtml}
+
+    <!-- Main Detail Grid -->
     <div class="details-split-grid">
       <div>
         <div class="info-card">
           <div class="info-card-title">
             <i class="lucide-bus" style="color:var(--primary-light)"></i>
-            <span>Morning Route Schedule & Stops</span>
+            <span>Complete Route Stops & Morning Schedule</span>
             <span class="route-badge" style="margin-left:auto;">${route.routeNo}</span>
           </div>
-          <div style="font-size:1.05rem; font-weight:700; color:var(--primary); margin-bottom:0.5rem;">
+          <div style="font-size:1.1rem; font-weight:700; color:var(--primary); margin-bottom:0.4rem;">
             ${route.name}
           </div>
-          <p style="font-size:0.9rem; color:var(--text-muted); margin-bottom:1rem;">
-            Target Destination: <strong>${route.campusId === 'ksk' ? 'UET KSK New Campus (Arrival 07:50 AM)' : 'UET Main Campus GT Road (Arrival 07:45 AM)'}</strong>
+          <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:1rem;">
+            Destination Campus: <strong>${campusLabel} (Arrival: ${route.arrivalTime})</strong>
           </p>
 
-          <h4 style="font-size:0.9rem; color:var(--primary); margin-top:1.25rem; margin-bottom:0.75rem;">
-            Morning Stop Schedule (In Order)
+          <h4 style="font-size:0.95rem; color:var(--primary); margin-top:1.25rem; margin-bottom:0.75rem;">
+            <i class="lucide-list"></i> Complete Route Stops (In Order)
           </h4>
           <div class="stops-timeline">
             ${timelineHtml}
           </div>
         </div>
+
+        ${otherNearbyHtml}
       </div>
 
       <div>
@@ -927,7 +831,7 @@ function renderResultPage() {
             <div class="driver-avatar">${route.driverName.charAt(0)}</div>
             <div class="driver-info">
               <h4>${route.driverName}</h4>
-              <p style="font-size:0.82rem; color:var(--text-muted);">Bus Driver / Operator</p>
+              <p style="font-size:0.82rem; color:var(--text-muted);">UET Bus Driver</p>
               <p style="font-size:0.85rem; font-weight:600; margin-top:0.2rem;">${getDisplayDriverPhone(route)}</p>
             </div>
             <a href="${route.campusId === 'main' ? 'javascript:void(0)' : `tel:${route.driverPhone}`}" class="btn-call" title="${route.campusId === 'main' ? 'Driver phone unavailable' : 'Call Driver'}" ${route.campusId === 'main' ? 'onclick="return false;"' : ''}>
@@ -937,12 +841,20 @@ function renderResultPage() {
 
           <div style="background:#F8FAFC; padding:0.85rem; border-radius:var(--radius-md); font-size:0.85rem; margin-bottom:1rem; border:1px solid var(--border-light);">
             <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
+              <span style="color:var(--text-muted);">Pickup Stop:</span>
+              <strong>${stop.name} (${stop.time})</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
+              <span style="color:var(--text-muted);">Distance from GPS:</span>
+              <strong style="color:var(--success);">${formattedDist}</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
               <span style="color:var(--text-muted);">Vehicle Number:</span>
               <strong>${getDisplayVehicleNo(route)}</strong>
             </div>
             <div style="display:flex; justify-content:space-between;">
               <span style="color:var(--text-muted);">Campus Destination:</span>
-              <strong>${route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}</strong>
+              <strong>${campusLabel}</strong>
             </div>
           </div>
 
@@ -959,9 +871,9 @@ function renderResultPage() {
         <div class="info-card">
           <div class="info-card-title">
             <i class="lucide-map" style="color:var(--primary-light)"></i>
-            <span>Interactive Stop Map</span>
+            <span>Interactive Pickup Location Map</span>
           </div>
-          <div id="result-map" class="map-container"></div>
+          <div id="result-map" class="map-container" style="height:280px; border-radius:var(--radius-md);"></div>
         </div>
       </div>
     </div>
@@ -969,10 +881,7 @@ function renderResultPage() {
 
   // Init Leaflet map after DOM render
   setTimeout(() => {
-    initLeafletMap('result-map', [stop.lat, stop.lng], 13, [
-      { lat: stop.lat, lng: stop.lng, title: `Pickup: ${stop.name}`, popup: `<b>Nearest Stop: ${stop.name}</b><br>Pickup Time: ${stop.time}` },
-      { lat: route.stops[route.stops.length-1].lat, lng: route.stops[route.stops.length-1].lng, title: 'Campus Destination', popup: `<b>${route.stops[route.stops.length-1].name}</b>` }
-    ]);
+    initLeafletMap('result-map', [stop.lat, stop.lng], 13, mapPoints);
   }, 100);
 }
 
@@ -1121,28 +1030,27 @@ function renderRoutesPage() {
   }
 }
 
+// Leaflet Map Initialization Helper
 function initLeafletMap(containerId, centerCoords, zoomLevel, points) {
   const container = document.getElementById(containerId);
-  if (!container || typeof L === 'undefined') {
-    return;
-  }
+  if (!container || typeof L === 'undefined') return;
 
-  if (window.__uetMapInstance) {
-    window.__uetMapInstance.remove();
+  if (appState.map) {
+    appState.map.remove();
+    appState.map = null;
   }
 
   const map = L.map(containerId).setView(centerCoords, zoomLevel);
-  window.__uetMapInstance = map;
+  appState.map = map;
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
 
-  points.forEach(point => {
-    const marker = L.marker([point.lat, point.lng]).addTo(map);
-    if (point.title) {
-      marker.bindPopup(point.popup || point.title);
-    }
+  points.forEach(pt => {
+    L.marker([pt.lat, pt.lng])
+      .addTo(map)
+      .bindPopup(pt.popup || pt.title);
   });
 }
 
@@ -1331,30 +1239,6 @@ function printRouteSchedule(routeId) {
 
 function closeModal() {
   document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
-}
-
-// Leaflet Map Initialization Helper
-function initLeafletMap(containerId, centerCoords, zoomLevel, points) {
-  const container = document.getElementById(containerId);
-  if (!container || typeof L === 'undefined') return;
-
-  if (appState.map) {
-    appState.map.remove();
-    appState.map = null;
-  }
-
-  const map = L.map(containerId).setView(centerCoords, zoomLevel);
-  appState.map = map;
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
-  }).addTo(map);
-
-  points.forEach(pt => {
-    L.marker([pt.lat, pt.lng])
-      .addTo(map)
-      .bindPopup(pt.popup);
-  });
 }
 
 // Route URL Hashes
