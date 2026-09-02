@@ -184,6 +184,14 @@ function initUIEvents() {
       appState.routeScheduleQuery = e.target.value.trim();
       renderRoutesPage();
     });
+
+    routeScheduleInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        routeScheduleInput.value = '';
+        appState.routeScheduleQuery = '';
+        renderRoutesPage();
+      }
+    });
   }
 
   // Modal Close buttons
@@ -270,12 +278,14 @@ function handleHeaderStopSearch() {
   }
 
   navigateToPage('routes');
-  renderRoutesPage();
 
   const routeSearchInput = document.getElementById('route-schedule-search');
   if (routeSearchInput) {
     routeSearchInput.value = rawQuery;
+    routeSearchInput.focus();
   }
+
+  renderRoutesPage();
 
   setTimeout(() => {
     const highlightedMatch = document.querySelector('.route-search-match');
@@ -692,7 +702,7 @@ function renderRoutesPage() {
     !appState.selectedCampus || r.campusId === appState.selectedCampus
   );
   const displayRoutes = routeSearchQuery
-    ? findExactStopMatches(routeSearchQuery)
+    ? selectedRoutes.filter(route => route.stops.some(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery)))
     : selectedRoutes;
 
   let html = `
@@ -700,21 +710,6 @@ function renderRoutesPage() {
       <div>
         <h2>Official UET Bus Routes (${appState.selectedCampus === 'ksk' ? 'KSK New Campus' : 'Main Campus - 22 Morning Routes'})</h2>
         <p style="color:var(--text-muted); font-size:0.9rem;">Morning Arrival Schedules extracted from official Transport Office PDF</p>
-      </div>
-    </div>
-
-    <div class="info-card" style="margin-bottom:1.25rem;">
-      <div class="search-field-wrapper" style="margin:0;">
-        <i class="lucide-search"></i>
-        <input
-          type="text"
-          id="route-schedule-search"
-          class="search-input"
-          placeholder="Search your bus stop..."
-          value="${appState.routeScheduleQuery.replace(/"/g, '&quot;')}"
-          aria-label="Search your bus stop"
-          oninput="appState.routeScheduleQuery = this.value.trim(); renderRoutesPage();"
-        />
       </div>
     </div>
 
@@ -744,6 +739,11 @@ function renderRoutesPage() {
 
   displayRoutes.forEach(route => {
     const isFav = appState.favorites.includes(route.id);
+    const exactMatchIndex = route.stops.findIndex(stop => normalizeStopSearchText(stop.name) === routeSearchQuery);
+    const fallbackMatchIndex = routeSearchQuery
+      ? route.stops.findIndex(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery))
+      : -1;
+    const matchedIndex = exactMatchIndex >= 0 ? exactMatchIndex : fallbackMatchIndex;
 
     html += `
       <div class="info-card" id="route-card-${route.id}" style="margin-bottom:1.75rem;">
@@ -787,7 +787,7 @@ function renderRoutesPage() {
             </thead>
             <tbody>
               ${route.stops.map((s, idx) => {
-                const isMatch = routeSearchQuery && normalizeStopSearchText(s.name) === routeSearchQuery;
+                const isMatch = !!routeSearchQuery && idx === matchedIndex;
                 return `
                   <tr class="${isMatch ? 'route-search-match' : ''}" ${isMatch ? 'data-stop-match="true"' : ''} ${idx === route.stops.length - 1 ? 'style="background:#EFF6FF; font-weight:700;"' : ''}>
                     <td>${idx + 1}</td>
