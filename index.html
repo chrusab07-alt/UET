@@ -392,6 +392,91 @@
   <script src="js/data.js"></script>
   <script src="js/app.js"></script>
   <script>
+    // Animated stat counters (runs once when stats become visible)
+    (function(){
+      function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
+
+      function formatWithSeparators(n){
+        return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      }
+
+      function animateNumber(el, from, to, duration, suffix){
+        var start = null;
+        var diff = to - from;
+        function step(timestamp){
+          if (!start) start = timestamp;
+          var progress = Math.min((timestamp - start) / duration, 1);
+          var eased = easeOutCubic(progress);
+          var current = Math.round(from + diff * eased);
+          el.textContent = formatWithSeparators(current) + (suffix||"");
+          if (progress < 1) requestAnimationFrame(step);
+          else el.dataset.animated = 'true';
+        }
+        requestAnimationFrame(step);
+      }
+
+      function animateTime(el, timeText, duration){
+        // expects formats like "07:50 AM" or "7:50". Preserve trailing AM/PM if present.
+        var parts = timeText.trim().split(/\s+/);
+        var hhmm = parts[0];
+        var ampm = parts[1] ? (' ' + parts[1]) : '';
+        var pieces = hhmm.split(':');
+        var targetH = parseInt(pieces[0], 10) || 0;
+        var targetM = parseInt(pieces[1], 10) || 0;
+        var start = null;
+        function step(ts){
+          if (!start) start = ts;
+          var progress = Math.min((ts - start) / duration, 1);
+          var eased = easeOutCubic(progress);
+          var curH = Math.floor(targetH * eased);
+          var curM = Math.floor(targetM * eased);
+          // clamp and format
+          curH = Math.min(curH, targetH);
+          curM = Math.min(curM, targetM);
+          var hh = String(curH).padStart(2, '0');
+          var mm = String(curM).padStart(2, '0');
+          el.textContent = hh + ':' + mm + ampm;
+          if (progress < 1) requestAnimationFrame(step);
+          else el.dataset.animated = 'true';
+        }
+        requestAnimationFrame(step);
+      }
+
+      document.addEventListener('DOMContentLoaded', function(){
+        var statsSection = document.querySelector('.stats-grid');
+        if (!statsSection) return;
+        var observer = new IntersectionObserver(function(entries, obs){
+          entries.forEach(function(entry){
+            if (entry.isIntersecting){
+              var vals = statsSection.querySelectorAll('.stat-val');
+              vals.forEach(function(el){
+                if (el.dataset.animated === 'true') return; // run only once per element
+                var raw = el.textContent.trim();
+                // Time-like (contains colon)
+                if (/\d+:\d+/.test(raw)){
+                  // animate hours and minutes together over ~1700ms
+                  animateTime(el, raw, 1700);
+                  return;
+                }
+                // extract numeric portion (keep + if present)
+                var hasPlus = /\+$/.test(raw);
+                var numeric = raw.replace(/[^0-9]/g, '');
+                if (numeric === '') return; // nothing to animate
+                var target = parseInt(numeric, 10) || 0;
+                // For very large numbers, ensure smoothness but keep within duration
+                var duration = 1700; // ~1.7s as requested
+                // start from 0
+                animateNumber(el, 0, target, duration, hasPlus ? '+' : '');
+              });
+              obs.unobserve(statsSection);
+            }
+          });
+        }, {threshold: 0.4});
+        observer.observe(statsSection);
+      });
+    })();
+  </script>
+  <script>
     // Initialize Lucide icons after rendering
     lucide.createIcons();
   </script>
