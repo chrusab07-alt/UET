@@ -247,7 +247,7 @@ function normalizeText(text) {
 }
 
 function normalizeStopSearchText(value) {
-  return (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return (value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 function findExactStopMatches(query) {
@@ -586,124 +586,19 @@ function renderResultPage() {
   }, 100);
 }
 
-// Render All Stops Directory Page
-function renderStopsPage() {
-  const container = document.getElementById('stops-list-container');
-  if (!container) return;
-
-  const searchQuery = (document.getElementById('stops-search-input')?.value || '').toLowerCase();
-  const campusFilter = document.getElementById('stops-campus-filter')?.value || 'all';
-
-  const stopMap = new Map();
-
-  UET_DATA.routes.forEach(route => {
-    if (campusFilter !== 'all' && route.campusId !== campusFilter) return;
-
-    route.stops.forEach((s, idx) => {
-      const key = s.name.toLowerCase().trim();
-      if (!stopMap.has(key)) {
-        stopMap.set(key, {
-          name: s.name,
-          lat: s.lat,
-          lng: s.lng,
-          routes: []
-        });
-      }
-      stopMap.get(key).routes.push({
-        routeNo: route.routeNo,
-        routeName: route.name,
-        routeId: route.id,
-        campusId: route.campusId,
-        time: s.time,
-        stopNumber: idx + 1
-      });
-    });
-  });
-
-  let allStops = Array.from(stopMap.values());
-
-  if (searchQuery) {
-    allStops = allStops.filter(s => s.name.toLowerCase().includes(searchQuery));
-  }
-
-  let html = `
-    <div class="filter-toolbar">
-      <div class="search-field-wrapper" style="flex:1;">
-        <i class="lucide-search"></i>
-        <input type="text" id="stops-search-input" class="search-input" placeholder="Search stop by name (e.g. Kalma Chowk, Defense, Shad Bagh, Ring Road)..." value="${searchQuery}" oninput="renderStopsPage()">
-      </div>
-      <select id="stops-campus-filter" class="select-control" onchange="renderStopsPage()">
-        <option value="all" ${campusFilter === 'all' ? 'selected' : ''}>All Campuses</option>
-        <option value="main" ${campusFilter === 'main' ? 'selected' : ''}>Main Campus Routes (22 Routes)</option>
-        <option value="ksk" ${campusFilter === 'ksk' ? 'selected' : ''}>KSK New Campus Routes</option>
-      </select>
-    </div>
-
-    <div class="data-table-wrapper">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Stop Name</th>
-            <th>Campus Destination</th>
-            <th>Connected Bus Routes</th>
-            <th>Morning Pickup Time</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${allStops.length === 0 ? `
-            <tr><td colspan="5" style="text-align:center; padding:2rem; color:var(--text-muted);">No stops found matching your search.</td></tr>
-          ` : allStops.map(stop => `
-            <tr>
-              <td>
-                <strong style="color:var(--primary); font-size:0.95rem;">${stop.name}</strong>
-              </td>
-              <td>
-                ${Array.from(new Set(stop.routes.map(r => r.campusId))).map(c => 
-                  `<span class="campus-chip" style="margin-right:0.25rem;">${c === 'ksk' ? 'KSK' : 'Main'}</span>`
-                ).join('')}
-              </td>
-              <td>
-                <div style="display:flex; flex-wrap:wrap; gap:0.35rem;">
-                  ${stop.routes.map(r => `
-                    <span class="route-badge" style="font-size:0.75rem; padding:0.15rem 0.45rem; cursor:pointer;" onclick="viewRouteDetail('${r.routeId}')" title="${r.routeName}">
-                      ${r.routeNo}
-                    </span>
-                  `).join('')}
-                </div>
-              </td>
-              <td>
-                <div style="font-size:0.82rem; color:var(--text-muted);">
-                  ${stop.routes.map(r => `<div>${r.routeNo}: <strong>${r.time}</strong></div>`).join('')}
-                </div>
-              </td>
-              <td>
-                <button class="btn-secondary" style="font-size:0.78rem; padding:0.35rem 0.65rem;" onclick="selectAreaChip('${stop.name}')">
-                  <i class="lucide-navigation"></i> Route Finder
-                </button>
-              </td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  container.innerHTML = html;
-}
-
 // Render Route Details View Page
 function renderRoutesPage() {
   const container = document.getElementById('routes-detail-container');
   if (!container) return;
 
   const routeSearchQuery = normalizeStopSearchText(appState.routeScheduleQuery);
-  const selectedRoutes = UET_DATA.routes.filter(r => 
+  const campusFilteredRoutes = UET_DATA.routes.filter(r => 
     !appState.selectedCampus || r.campusId === appState.selectedCampus
   );
-  const displayRoutes = routeSearchQuery
-    ? selectedRoutes.filter(route => route.stops.some(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery)))
-    : selectedRoutes;
+  const selectedRoutes = routeSearchQuery
+    ? UET_DATA.routes.filter(route => route.stops.some(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery)))
+    : campusFilteredRoutes;
+  const displayRoutes = selectedRoutes;
 
   let html = `
     <div style="margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
