@@ -189,6 +189,29 @@ function buildNearbyRouteResults(userLat, userLng, radiusKm = 3) {
     .sort((a, b) => a.distanceKm - b.distanceKm);
 }
 
+function buildNearbyStopSuggestions(userLat, userLng, maxDistanceKm = 1.5) {
+  const stopMap = new Map();
+
+  UET_DATA.routes.forEach(route => {
+    route.stops.forEach(stop => {
+      const distanceKm = calculateDistance(userLat, userLng, stop.lat, stop.lng);
+      if (distanceKm <= maxDistanceKm) {
+        const key = `${route.id}:${stop.name}`;
+        if (!stopMap.has(key)) {
+          stopMap.set(key, {
+            route,
+            stop,
+            distanceKm
+          });
+        }
+      }
+    });
+  });
+
+  return Array.from(stopMap.values())
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+}
+
 function showNearbyBusRoutes(lat, lng, locationLabel, radiusKm = 3) {
   const nearbyRoutes = buildNearbyRouteResults(lat, lng, radiusKm);
   appState.nearbyRouteResults = nearbyRoutes;
@@ -273,7 +296,6 @@ function setSelectedCampus(campusId) {
   });
 
   renderHomePage();
-  renderStopsPage();
   renderRoutesPage();
 }
 
@@ -427,10 +449,18 @@ function normalizeStopSearchText(value) {
   return (value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
-function findExactStopMatches(query) {
+function findExactStopMatches(query, preferredCampusId = null) {
   const normalizedQuery = normalizeStopSearchText(query);
   if (!normalizedQuery) {
     return [];
+  }
+
+  const preferredMatches = preferredCampusId
+    ? UET_DATA.routes.filter(route => route.campusId === preferredCampusId && route.stops.some(stop => normalizeStopSearchText(stop.name) === normalizedQuery))
+    : [];
+
+  if (preferredMatches.length > 0) {
+    return preferredMatches;
   }
 
   return UET_DATA.routes.filter(route =>
@@ -448,7 +478,7 @@ function handleHeaderStopSearch() {
   }
 
   appState.routeScheduleQuery = rawQuery;
-  const matchingRoutes = findExactStopMatches(rawQuery);
+  const matchingRoutes = findExactStopMatches(rawQuery, appState.selectedCampus);
 
   if (matchingRoutes.length > 0) {
     appState.selectedCampus = matchingRoutes[0].campusId;
@@ -638,6 +668,9 @@ function renderResultPage() {
     const locationLabel = appState.currentLocation ? appState.currentLocation.name : 'Selected location';
     const userLat = appState.currentLocation ? appState.currentLocation.lat : nearbyResults[0].route.stops[0].lat;
     const userLng = appState.currentLocation ? appState.currentLocation.lng : nearbyResults[0].route.stops[0].lng;
+    const nearbyStops = buildNearbyStopSuggestions(userLat, userLng, 1.5);
+    const yourStops = nearbyStops.filter(item => item.distanceKm <= 0.5);
+    const suggestedStops = nearbyStops.filter(item => item.distanceKm > 0.5 && item.distanceKm <= 1.5);
 
     const mapPoints = [
       { lat: userLat, lng: userLng, title: 'Your Location', popup: `<b>Your Location</b><br>${locationLabel}` },
@@ -648,6 +681,42 @@ function renderResultPage() {
         popup: `<b>${item.route.routeNo}</b><br>${item.stop.name}<br>Distance: ${item.distanceKm.toFixed(1)} km`
       }))
     ];
+
+    const renderStopList = (items, title, emptyText) => {
+      if (!items.length) {
+        return `
+          <div class="info-card" style="margin-bottom:1rem;">
+            <div class="info-card-title">
+              <i class="lucide-map-pin" style="color:var(--primary-light)"></i>
+              <span>${title}</span>
+            </div>
+            <div style="color:var(--text-muted); padding:0.5rem 0;">${emptyText}</div>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="info-card" style="margin-bottom:1rem;">
+          <div class="info-card-title">
+            <i class="lucide-map-pin" style="color:var(--primary-light)"></i>
+            <span>${title}</span>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:0.75rem;">
+            ${items.map(({ route, stop, distanceKm }) => `
+              <div style="background:#F8FAFC; border:1px solid var(--border-light); border-radius:var(--radius-md); padding:0.85rem 1rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                  <div>
+                    <span class="route-badge">${route.routeNo}</span>
+                    <div style="font-size:1rem; font-weight:700; color:var(--primary); margin-top:0.4rem;">${stop.name}</div>
+                  </div>
+                  <span class="distance-badge"><i class="lucide-map-pin"></i> ${distanceKm.toFixed(1)} km</span>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    };
 
     container.innerHTML = `
       <div class="result-hero-box">
@@ -669,6 +738,9 @@ function renderResultPage() {
 
       <div class="details-split-grid">
         <div>
+          ${renderStopList(yourStops, 'Your Stop', 'No stop found within 0.5 km of your location.')}
+          ${renderStopList(suggestedStops, 'Other Suggested Stops', 'No additional nearby stops between 0.5 km and 1.5 km.')}
+
           <div class="info-card">
             <div class="info-card-title">
               <i class="lucide-bus" style="color:var(--primary-light)"></i>
@@ -892,7 +964,9 @@ function renderRoutesPage() {
     !appState.selectedCampus || r.campusId === appState.selectedCampus
   );
   const selectedRoutes = routeSearchQuery
-    ? UET_DATA.routes.filter(route => route.stops.some(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery)))
+    ? campusFilteredRoutes.filter(route =>
+        route.stops.some(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery))
+      )
     : campusFilteredRoutes;
   const displayRoutes = selectedRoutes;
 
