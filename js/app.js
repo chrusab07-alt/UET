@@ -339,8 +339,22 @@ function initUIEvents() {
       e.preventDefault();
       const page = btn.dataset.page;
       navigateToPage(page);
+      const navLinks = document.querySelector('.nav-links');
+      if (navLinks && navLinks.classList.contains('open')) {
+        navLinks.classList.remove('open');
+      }
     });
   });
+
+  const navToggle = document.querySelector('.nav-toggle');
+  if (navToggle) {
+    navToggle.addEventListener('click', () => {
+      const navLinks = document.querySelector('.nav-links');
+      if (!navLinks) return;
+      const isOpen = navLinks.classList.toggle('open');
+      navToggle.setAttribute('aria-expanded', String(isOpen));
+    });
+  }
 
   // Campus Toggle Buttons
   document.querySelectorAll('.campus-btn').forEach(btn => {
