@@ -416,7 +416,6 @@
       }
 
       function animateTime(el, timeText, duration){
-        // expects formats like "07:50 AM" or "7:50". Preserve trailing AM/PM if present.
         var parts = timeText.trim().split(/\s+/);
         var hhmm = parts[0];
         var ampm = parts[1] ? (' ' + parts[1]) : '';
@@ -430,7 +429,6 @@
           var eased = easeOutCubic(progress);
           var curH = Math.floor(targetH * eased);
           var curM = Math.floor(targetM * eased);
-          // clamp and format
           curH = Math.min(curH, targetH);
           curM = Math.min(curM, targetM);
           var hh = String(curH).padStart(2, '0');
@@ -450,23 +448,17 @@
             if (entry.isIntersecting){
               var vals = statsSection.querySelectorAll('.stat-val');
               vals.forEach(function(el){
-                if (el.dataset.animated === 'true') return; // run only once per element
+                if (el.dataset.animated === 'true') return;
                 var raw = el.textContent.trim();
-                // Time-like (contains colon)
                 if (/\d+:\d+/.test(raw)){
-                  // animate hours and minutes together over ~1700ms
                   animateTime(el, raw, 1700);
                   return;
                 }
-                // extract numeric portion (keep + if present)
                 var hasPlus = /\+$/.test(raw);
                 var numeric = raw.replace(/[^0-9]/g, '');
-                if (numeric === '') return; // nothing to animate
+                if (numeric === '') return;
                 var target = parseInt(numeric, 10) || 0;
-                // For very large numbers, ensure smoothness but keep within duration
-                var duration = 1700; // ~1.7s as requested
-                // start from 0
-                animateNumber(el, 0, target, duration, hasPlus ? '+' : '');
+                animateNumber(el, 0, target, 1700, hasPlus ? '+' : '');
               });
               obs.unobserve(statsSection);
             }
@@ -477,8 +469,27 @@
     })();
   </script>
   <script>
-    // Initialize Lucide icons after rendering
-    lucide.createIcons();
+    // Force the Lucide CDN script to render icons from the existing class naming
+    document.addEventListener('DOMContentLoaded', function(){
+      var iconEls = document.querySelectorAll('i[class*="lucide-"]');
+      iconEls.forEach(function(icon){
+        var name = Array.from(icon.classList).find(function(cls){
+          return cls.indexOf('lucide-') === 0;
+        });
+        if (name && !icon.hasAttribute('data-lucide')) {
+          icon.setAttribute('data-lucide', name.replace(/^lucide-/, ''));
+        }
+        if (!icon.classList.contains('lucide')) {
+          icon.classList.add('lucide');
+        }
+      });
+      if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        window.lucide.createIcons({
+          root: document,
+          nameAttr: 'data-lucide'
+        });
+      }
+    });
   </script>
 </body>
 </html>
