@@ -444,7 +444,7 @@ input, select, textarea {
   box-shadow: 0 4px 12px rgba(229, 169, 60, 0.3);
 }
 
-.route-campus-btn {
+.route-campus-btn, .result-campus-btn {
   background: #F8FAFC;
   color: var(--text-main);
   border: 1px solid var(--border-light);
@@ -458,7 +458,7 @@ input, select, textarea {
   transition: var(--transition-fast);
 }
 
-.route-campus-btn.active {
+.route-campus-btn.active, .result-campus-btn.active {
   background: var(--accent);
   color: var(--primary-dark);
   border-color: transparent;

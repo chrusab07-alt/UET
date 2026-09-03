@@ -3,7 +3,7 @@
 let appState = {
   selectedCampus: 'ksk', // 'ksk' or 'main'
   currentLocation: null, // { lat, lng, name }
-  recommendationResults: null, // { status: 'within_500m' | 'nearest' | 'none', matchingRoutes, allNearby, userLat, userLng, locationLabel }
+  recommendationResults: null, // { status: 'within_500m' | 'nearest' | 'none', matchingRoutes, allNearby, userLat, userLng, locationLabel, targetCampus }
   activeRecommendationIndex: 0,
   locationSearchError: null,
   activePage: 'home',
@@ -43,23 +43,41 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 }
 
 /**
- * GPS Distance-Based Route Recommendation Algorithm
+ * GPS Distance-Based Route Recommendation Algorithm with Strict Campus-First Filtering
  * 
- * Rules:
- * 1. Calculates Haversine distance from user's GPS coordinates to EVERY bus stop.
- * 2. Finds the nearest pickup stop for each route.
- * 3. If multiple stops are within 500 meters (0.5 km), returns all matching routes sorted by distance.
- * 4. If no stops within 500m, but stops exist within 5 km, recommends the route belonging to the nearest stop.
- * 5. If no stop is found within 5 km, returns status: 'none' -> "No nearby UET bus stop found."
- * 6. Never guesses using locality strings or text matching.
+ * Workflow:
+ * 1. User selects campus (Main or KSK).
+ * 2. Filter the route database to ONLY that selected campus (First Filter).
+ * 3. Calculate distance from user's GPS coordinates to every stop in those filtered routes.
+ * 4. Find the nearest stop among the filtered campus routes.
+ * 5. If multiple stops are within 500 meters (0.5 km) for that campus, return all matching routes sorted by distance.
+ * 6. If no stops within 500m, but stops exist within 5 km, recommend the nearest route from that campus.
+ * 7. If no stop found within 5 km for that campus, returns status: 'none' -> "No nearby UET bus stop found."
  */
-function findBusRoutesByGps(userLat, userLng) {
-  const MAX_RADIUS_KM = 5.0;     // 5 km max radius
-  const NEARBY_THRESHOLD_KM = 0.5; // 500 meters threshold
+function findBusRoutesByGps(userLat, userLng, campusFilter = null) {
+  const MAX_RADIUS_KM = 5.0;       // 5 km max radius
+  const NEARBY_THRESHOLD_KM = 0.5;   // 500 meters threshold
+
+  // Step 1: Resolve selected campus ('main' or 'ksk')
+  const targetCampus = (campusFilter || appState.selectedCampus || 'ksk').toString().toLowerCase();
+
+  // Step 2: Filter the route database to ONLY that campus (FIRST FILTER)
+  const campusRoutes = UET_DATA.routes.filter(route => {
+    const rCampusId = (route.campusId || '').toLowerCase();
+    const rCampus = (route.campus || '').toLowerCase();
+    if (targetCampus === 'main') {
+      return rCampusId === 'main' || rCampus === 'main' || rCampus.includes('main');
+    }
+    if (targetCampus === 'ksk') {
+      return rCampusId === 'ksk' || rCampus === 'ksk' || rCampus.includes('ksk');
+    }
+    return rCampusId === targetCampus || rCampus === targetCampus;
+  });
 
   const routeCandidates = [];
 
-  UET_DATA.routes.forEach(route => {
+  // Step 3 & 4: Collect stops only from the filtered campus routes and calculate Haversine distance
+  campusRoutes.forEach(route => {
     let closestStop = null;
     let minDistanceKm = Infinity;
     let closestStopIndex = -1;
@@ -95,6 +113,7 @@ function findBusRoutesByGps(userLat, userLng) {
   if (routeCandidates.length === 0) {
     return {
       status: 'none',
+      targetCampus: targetCampus,
       matchingRoutes: [],
       allNearby: []
     };
@@ -106,21 +125,24 @@ function findBusRoutesByGps(userLat, userLng) {
   if (within500m.length > 0) {
     return {
       status: 'within_500m',
+      targetCampus: targetCampus,
       matchingRoutes: within500m,
       allNearby: routeCandidates
     };
   }
 
-  // Fallback: nearest stop within 5 km
+  // Fallback: nearest stop within 5 km from the selected campus
   return {
     status: 'nearest',
+    targetCampus: targetCampus,
     matchingRoutes: [routeCandidates[0]],
     allNearby: routeCandidates
   };
 }
 
-function recommendRoutesByGps(userLat, userLng, locationLabel) {
-  const result = findBusRoutesByGps(userLat, userLng);
+function recommendRoutesByGps(userLat, userLng, locationLabel, campusFilter = null) {
+  const targetCampus = campusFilter || appState.selectedCampus || 'ksk';
+  const result = findBusRoutesByGps(userLat, userLng, targetCampus);
 
   appState.currentLocation = {
     lat: userLat,
@@ -133,7 +155,8 @@ function recommendRoutesByGps(userLat, userLng, locationLabel) {
     ...result,
     userLat: userLat,
     userLng: userLng,
-    locationLabel: locationLabel
+    locationLabel: locationLabel,
+    campus: targetCampus
   };
 
   renderResultPage();
@@ -196,7 +219,7 @@ function initGoogleLocationSearch() {
     const lat = loc.lat();
     const lng = loc.lng();
     const label = place.formatted_address || input.value.trim();
-    recommendRoutesByGps(lat, lng, label);
+    recommendRoutesByGps(lat, lng, label, appState.selectedCampus);
   });
 
   input.dataset.googleAutocompleteBound = 'true';
@@ -250,13 +273,18 @@ function getDisplayVehicleNo(route) {
 function setSelectedCampus(campusId) {
   appState.selectedCampus = campusId;
 
-  document.querySelectorAll('.campus-btn, .route-campus-btn').forEach(btn => {
+  document.querySelectorAll('.campus-btn, .route-campus-btn, .result-campus-btn').forEach(btn => {
     const isActive = btn.dataset.campus === campusId;
     btn.classList.toggle('active', isActive);
   });
 
   renderHomePage();
   renderRoutesPage();
+
+  // If on result page with an active location, re-run recommendation with new campus filter
+  if (appState.currentLocation && appState.activePage === 'result') {
+    recommendRoutesByGps(appState.currentLocation.lat, appState.currentLocation.lng, appState.currentLocation.name, campusId);
+  }
 }
 
 // Navigation & Tab Switching
@@ -316,7 +344,7 @@ function initUIEvents() {
   });
 
   document.addEventListener('click', (e) => {
-    const campusBtn = e.target.closest('.route-campus-btn');
+    const campusBtn = e.target.closest('.route-campus-btn, .result-campus-btn');
     if (!campusBtn) return;
     setSelectedCampus(campusBtn.dataset.campus);
   });
@@ -399,7 +427,7 @@ function detectUserGeolocation() {
         input.value = `GPS (${userLat.toFixed(4)}, ${userLng.toFixed(4)})`;
       }
 
-      recommendRoutesByGps(userLat, userLng, "Your Current GPS Location");
+      recommendRoutesByGps(userLat, userLng, "Your Current GPS Location", appState.selectedCampus);
     },
     (err) => {
       btnLocate.innerHTML = `<i class="lucide-crosshair"></i> Detect My Area`;
@@ -471,7 +499,7 @@ function handleHeaderStopSearch() {
   }, 100);
 }
 
-// Location Text Search Handler - Geocodes to lat/lng then runs GPS distance algorithm
+// Location Text Search Handler - Geocodes to lat/lng then runs GPS distance algorithm for selected campus
 async function handleLocationSearch() {
   const rawQuery = document.getElementById('main-location-input').value.trim();
   if (!rawQuery) {
@@ -498,7 +526,7 @@ async function handleLocationSearch() {
       return;
     }
 
-    recommendRoutesByGps(geocode.lat, geocode.lng, geocode.formattedAddress || rawQuery);
+    recommendRoutesByGps(geocode.lat, geocode.lng, geocode.formattedAddress || rawQuery, appState.selectedCampus);
   } catch (error) {
     appState.locationSearchError = 'Location lookup failed. Please click "Detect My Area" to use your GPS location.';
     appState.recommendationResults = null;
@@ -512,13 +540,13 @@ async function handleLocationSearch() {
   }
 }
 
-// Quick Chip Select - passes coordinates into pure GPS distance algorithm
+// Quick Chip Select - passes coordinates into pure GPS distance algorithm for selected campus
 function selectAreaChip(areaName) {
   const area = POPULAR_AREAS.find(a => a.name === areaName);
   if (area) {
     const input = document.getElementById('main-location-input');
     if (input) input.value = area.name;
-    recommendRoutesByGps(area.lat, area.lng, area.name);
+    recommendRoutesByGps(area.lat, area.lng, area.name, appState.selectedCampus);
   }
 }
 
@@ -606,8 +634,33 @@ function renderResultPage() {
   const container = document.getElementById('result-content-container');
   if (!container) return;
 
+  const currentCampusName = appState.selectedCampus === 'main' ? 'Main Campus (GT Road)' : 'KSK / New Campus';
+
+  // Campus Selector Bar for Result Page
+  const campusToggleBarHtml = `
+    <div class="info-card" style="margin-bottom:1.25rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+        <div>
+          <span style="font-size:0.78rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Target Campus Filter:</span>
+          <div style="margin-top:0.15rem; font-weight:700; color:var(--primary); font-size:1.05rem;">
+            ${currentCampusName}
+          </div>
+        </div>
+        <div class="campus-toggle-wrapper" style="margin:0; background:#F8FAFC; border:1px solid var(--border-light); padding:0.25rem;">
+          <button class="route-campus-btn ${appState.selectedCampus === 'ksk' ? 'active' : ''}" data-campus="ksk" onclick="setSelectedCampus('ksk')" style="padding:0.45rem 1.1rem; font-size:0.85rem;">
+            <i class="lucide-building-2"></i> KSK Campus
+          </button>
+          <button class="route-campus-btn ${appState.selectedCampus === 'main' ? 'active' : ''}" data-campus="main" onclick="setSelectedCampus('main')" style="padding:0.45rem 1.1rem; font-size:0.85rem;">
+            <i class="lucide-graduation-cap"></i> Main Campus
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
   if (appState.locationSearchError) {
     container.innerHTML = `
+      ${campusToggleBarHtml}
       <div class="info-card no-result-box">
         <div class="no-result-icon"><i class="lucide-map-pin-off"></i></div>
         <h3>Location not found</h3>
@@ -625,13 +678,17 @@ function renderResultPage() {
   const rec = appState.recommendationResults;
   if (!rec || rec.status === 'none' || !rec.matchingRoutes || rec.matchingRoutes.length === 0) {
     container.innerHTML = `
+      ${campusToggleBarHtml}
       <div class="info-card no-result-box">
         <div class="no-result-icon"><i class="lucide-search-x"></i></div>
         <h3>No nearby UET bus stop found.</h3>
-        <p>No official UET bus stop was found within 5 km of your location.</p>
+        <p>No official UET bus stop was found within 5 km of your location for <strong>${currentCampusName}</strong>.</p>
         <div style="margin-top:1.5rem; display:flex; gap:0.75rem; justify-content:center; flex-wrap:wrap;">
           <button class="btn-find-bus" onclick="detectUserGeolocation()">
             <i class="lucide-crosshair"></i> Retry GPS
+          </button>
+          <button class="btn-secondary" onclick="setSelectedCampus('${appState.selectedCampus === 'main' ? 'ksk' : 'main'}')">
+            <i class="lucide-arrow-right-left"></i> Check ${appState.selectedCampus === 'main' ? 'KSK' : 'Main'} Campus Routes
           </button>
           <button class="btn-secondary" onclick="navigateToPage('routes')">
             <i class="lucide-route"></i> Browse All Routes
@@ -683,7 +740,7 @@ function renderResultPage() {
     `;
   });
 
-  // If multiple routes within 500m (or multiple nearby routes)
+  // If multiple routes within 500m for this campus
   const isMultiMatch = rec.matchingRoutes.length > 1;
   let multiRouteSelectorHtml = '';
   if (isMultiMatch) {
@@ -691,10 +748,10 @@ function renderResultPage() {
       <div class="info-card" style="margin-bottom:1.25rem;">
         <div class="info-card-title">
           <i class="lucide-route" style="color:var(--primary-light)"></i>
-          <span>Multiple Matching Routes Within 500 Meters (${rec.matchingRoutes.length} Found)</span>
+          <span>Multiple Matching ${campusLabel} Routes Within 500 Meters (${rec.matchingRoutes.length} Found)</span>
         </div>
         <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1rem;">
-          The following UET bus routes have pickup stops within 500 meters of your GPS location, sorted by distance:
+          The following ${campusLabel} bus routes have pickup stops within 500 meters of your GPS location, sorted by distance:
         </p>
         <div style="display:flex; flex-direction:column; gap:0.6rem;">
           ${rec.matchingRoutes.map((item, i) => {
@@ -723,7 +780,7 @@ function renderResultPage() {
     `;
   }
 
-  // Other nearby routes within 5 km (if any exist beyond the primary/within 500m group)
+  // Other nearby routes within 5 km for this campus
   const otherNearby = rec.allNearby.filter(item => !rec.matchingRoutes.some(m => m.route.id === item.route.id)).slice(0, 4);
   let otherNearbyHtml = '';
   if (otherNearby.length > 0) {
@@ -731,7 +788,7 @@ function renderResultPage() {
       <div class="info-card" style="margin-top:1.25rem;">
         <div class="info-card-title">
           <i class="lucide-compass" style="color:var(--primary-light)"></i>
-          <span>Other Nearby Routes (Within 5 km)</span>
+          <span>Other Nearby ${campusLabel} Routes (Within 5 km)</span>
         </div>
         <div style="display:flex; flex-direction:column; gap:0.6rem;">
           ${otherNearby.map((item) => {
@@ -765,6 +822,8 @@ function renderResultPage() {
   ];
 
   container.innerHTML = `
+    ${campusToggleBarHtml}
+
     <!-- Hero Recommendation Banner -->
     <div class="result-hero-box">
       <div class="nearest-stop-banner">
@@ -773,7 +832,7 @@ function renderResultPage() {
         </div>
         <div class="nearest-stop-info" style="flex:1;">
           <div style="font-size:0.85rem; text-transform:uppercase; font-weight:700; color:var(--text-muted);">
-            Recommended Bus Stop for ${userLocationLabel}
+            Recommended ${campusLabel} Bus Stop for ${userLocationLabel}
           </div>
           <h2>${stop.name}</h2>
           <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.3rem; flex-wrap:wrap;">
@@ -1060,7 +1119,7 @@ function viewRouteDetail(routeId) {
   if (!route) return;
 
   appState.selectedCampus = route.campusId;
-  document.querySelectorAll('.campus-btn').forEach(b => {
+  document.querySelectorAll('.campus-btn, .route-campus-btn, .result-campus-btn').forEach(b => {
     if (b.dataset.campus === route.campusId) b.classList.add('active');
     else b.classList.remove('active');
   });
