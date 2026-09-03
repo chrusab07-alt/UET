@@ -122,7 +122,7 @@
     <div class="notice-ticker">
       <span class="notice-badge"><i class="lucide-bell"></i> Transport Notice</span>
       <div class="notice-text">
-        Morning buses arrive strictly at 07:50 AM (KSK) & 07:45 AM (Main). Departure from campus is at 04:15 PM daily.
+        Please reach at least 10 minutes before the bus at your stop
       </div>
     </div>
 
@@ -367,6 +367,23 @@
       <button class="modal-close"><i class="lucide-x"></i></button>
       <div id="print-modal-body">
         <!-- Rendered by printRouteSchedule() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete Confirmation Modal for Saved Routes -->
+  <div id="delete-confirm-modal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 440px; text-align: center; padding: 2rem 1.5rem;">
+      <div style="width: 52px; height: 52px; background: #FEE2E2; color: var(--danger); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.25rem; font-size: 1.5rem;">
+        <i class="lucide-trash-2"></i>
+      </div>
+      <h3 style="margin-bottom: 0.5rem; font-size: 1.2rem; color: var(--text-dark);">Remove Saved Route</h3>
+      <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.5rem; line-height: 1.5;">
+        Are you sure to delete this route from your saved routes?
+      </p>
+      <div style="display: flex; gap: 0.75rem; justify-content: center;">
+        <button type="button" class="btn-secondary" style="flex: 1; padding: 0.65rem 1rem; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer;" onclick="closeDeleteModal()">No</button>
+        <button type="button" style="flex: 1; padding: 0.65rem 1rem; background: var(--danger, #EF4444); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: background 0.2s;" onclick="executeDeleteFavorite()">Yes</button>
       </div>
     </div>
   </div>

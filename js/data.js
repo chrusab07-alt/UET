@@ -25,7 +25,7 @@ const UET_DATA = {
   transportContact: {
     chairman: "Mr. M. Mushtaq",
     phone: "0304-0165776",
-    office: "Transport Office, UET Main & New Campus",
+    office: "Transport Office, UET New Campus",
     timing: "08:00 AM - 04:00 PM (Mon-Fri)"
   },
 

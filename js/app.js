@@ -18,6 +18,26 @@ function getGoogleMapsApiKey() {
   return (window.UET_CONFIG && window.UET_CONFIG.googleMapsApiKey) || '';
 }
 
+// Force refresh Lucide SVG icons in dynamic containers
+function refreshLucideIcons() {
+  if (window.lucide && typeof window.lucide.createIcons === 'function') {
+    const iconEls = document.querySelectorAll('i[class*="lucide-"]');
+    iconEls.forEach(icon => {
+      const name = Array.from(icon.classList).find(cls => cls.startsWith('lucide-'));
+      if (name && !icon.hasAttribute('data-lucide')) {
+        icon.setAttribute('data-lucide', name.replace(/^lucide-/, ''));
+      }
+      if (!icon.classList.contains('lucide')) {
+        icon.classList.add('lucide');
+      }
+    });
+    window.lucide.createIcons({
+      root: document,
+      nameAttr: 'data-lucide'
+    });
+  }
+}
+
 // Initialize Application on DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
   initUIEvents();
@@ -27,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderFaqs();
   updateFavoritesBadge();
   handleUrlRouting();
+  refreshLucideIcons();
 });
 
 // Calculate Haversine Distance (in kilometers) between two GPS points
@@ -308,6 +329,11 @@ function navigateToPage(pageId) {
     }
   });
 
+  if (pageId === 'favorites') {
+    renderFavoritesPage();
+  }
+
+  refreshLucideIcons();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -621,6 +647,7 @@ function renderHomePage() {
       `).join('')}
     `;
   }
+  refreshLucideIcons();
 }
 
 // Switch active recommendation when multiple routes are found
@@ -1078,6 +1105,7 @@ function renderRoutesPage() {
   });
 
   container.innerHTML = html;
+  refreshLucideIcons();
 
   if (routeSearchQuery) {
     setTimeout(() => {
@@ -1150,6 +1178,44 @@ function toggleFavorite(routeId, btnEl) {
   }
 
   renderHomePage();
+  refreshLucideIcons();
+}
+
+let pendingDeleteRouteId = null;
+
+// Open Confirmation Popup to Remove Route from Saved
+function promptRemoveFavorite(routeId) {
+  pendingDeleteRouteId = routeId;
+  const modal = document.getElementById('delete-confirm-modal');
+  if (modal) {
+    modal.classList.add('active');
+    refreshLucideIcons();
+  }
+}
+
+// Close Delete Confirmation Popup
+function closeDeleteModal() {
+  pendingDeleteRouteId = null;
+  const modal = document.getElementById('delete-confirm-modal');
+  if (modal) {
+    modal.classList.remove('active');
+  }
+}
+
+// Confirm and Execute Deletion from Saved Routes
+function executeDeleteFavorite() {
+  if (pendingDeleteRouteId) {
+    const idx = appState.favorites.indexOf(pendingDeleteRouteId);
+    if (idx > -1) {
+      appState.favorites.splice(idx, 1);
+      localStorage.setItem('uet_fav_routes', JSON.stringify(appState.favorites));
+      updateFavoritesBadge();
+    }
+    pendingDeleteRouteId = null;
+  }
+  closeDeleteModal();
+  renderFavoritesPage();
+  renderHomePage();
 }
 
 // Favorites Count Badge
@@ -1179,6 +1245,7 @@ function renderFavoritesPage() {
         </button>
       </div>
     `;
+    refreshLucideIcons();
     return;
   }
 
@@ -1198,13 +1265,16 @@ function renderFavoritesPage() {
         </div>
         <div class="route-card-actions">
           <button class="btn-card-primary" onclick="viewRouteDetail('${route.id}')">View Route</button>
-          <button class="btn-fav active" onclick="toggleFavorite('${route.id}', this)"><i class="lucide-trash-2"></i></button>
+          <button class="btn-fav active" onclick="promptRemoveFavorite('${route.id}')" title="Delete from Saved">
+            <i class="lucide-trash-2"></i>
+          </button>
         </div>
       </div>
     `;
   });
   html += `</div>`;
   container.innerHTML = html;
+  refreshLucideIcons();
 }
 
 // FAQ Accordion Handler
@@ -1223,6 +1293,7 @@ function renderFaqs() {
       </div>
     </div>
   `).join('');
+  refreshLucideIcons();
 }
 
 function toggleFaq(index) {
@@ -1294,9 +1365,11 @@ function printRouteSchedule(routeId) {
   `;
 
   modal.classList.add('active');
+  refreshLucideIcons();
 }
 
 function closeModal() {
+  pendingDeleteRouteId = null;
   document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
 }
 
