@@ -169,7 +169,7 @@ const UET_DATA = {
         { name: "Total Pump", time: "7:07 AM", lat: 31.4850, lng: 74.3890 },
         { name: "Punjab Society", time: "7:12 AM", lat: 31.4680, lng: 74.3980 },
         { name: "Defence Mor", time: "7:20 AM", lat: 31.4920, lng: 74.3480 },
-        { name: "Kent", time: "7:23 AM", lat: 31.5210, lng: 74.3750 },
+        { name: "Cantt", time: "7:23 AM", lat: 31.5210, lng: 74.3750 },
         { name: "Girja Chowk", time: "7:25 AM", lat: 31.5350, lng: 74.3680 },
         { name: "Sadar Chowk", time: "7:30 AM", lat: 31.5490, lng: 74.3610 },
         { name: "UET Main Campus", time: "7:45 AM", lat: 31.5794, lng: 74.3562 }
@@ -319,7 +319,7 @@ const UET_DATA = {
       stops: [
         { name: "Wapda Town", time: "6:55 AM", lat: 31.4390, lng: 74.2690 },
         { name: "HBL office", time: "6:57 AM", lat: 31.4420, lng: 74.2710 },
-        { name: "Kakes & Bakes bakeri", time: "6:58 AM", lat: 31.4450, lng: 74.2730 },
+        { name: "Cakes and Bakes bakery", time: "6:58 AM", lat: 31.4450, lng: 74.2730 },
         { name: "Mosque Chowk", time: "7:00 AM", lat: 31.4480, lng: 74.2750 },
         { name: "Govt. College", time: "7:03 AM", lat: 31.4520, lng: 74.2790 },
         { name: "Wapda Town Gol Chakar Outside", time: "7:05 AM", lat: 31.4560, lng: 74.2830 },
@@ -530,7 +530,7 @@ const UET_DATA = {
         { name: "Park Stop Mini Market", time: "7:15 AM", lat: 31.5750, lng: 74.3050 },
         { name: "Park Stop", time: "7:17 AM", lat: 31.5680, lng: 74.3090 },
         { name: "Shanai Mall", time: "7:20 AM", lat: 31.5520, lng: 74.3050 },
-        { name: "Saman Abad Mor", time: "7:25 AM", lat: 31.5346, lng: 74.2941 },
+        { name: "Samanabad Mor", time: "7:25 AM", lat: 31.5346, lng: 74.2941 },
         { name: "UET Main Campus", time: "7:50 AM", lat: 31.5794, lng: 74.3562 }
       ]
     },
@@ -562,7 +562,7 @@ const UET_DATA = {
         { name: "Islamia Park 1st Gol Chakar", time: "7:30 AM", lat: 31.5640, lng: 74.3190 },
         { name: "Mosque", time: "7:30 AM", lat: 31.5645, lng: 74.3200 },
         { name: "Quarter", time: "7:31 AM", lat: 31.5650, lng: 74.3210 },
-        { name: "Chaborji", time: "7:32 AM", lat: 31.5510, lng: 74.3020 },
+        { name: "Chaburji", time: "7:32 AM", lat: 31.5510, lng: 74.3020 },
         { name: "Mian Sb", time: "7:33 AM", lat: 31.5520, lng: 74.3050 },
         { name: "Abid Markeet", time: "7:35 AM", lat: 31.5420, lng: 74.3150 },
         { name: "Waris Road", time: "7:37 AM", lat: 31.5450, lng: 74.3220 },
@@ -588,7 +588,7 @@ const UET_DATA = {
         { name: "Local Govt. Complex", time: "7:15 AM", lat: 31.5590, lng: 74.3050 },
         { name: "Main Bazar Islam Pura", time: "7:18 AM", lat: 31.5660, lng: 74.2957 },
         { name: "District Kachari", time: "7:25 AM", lat: 31.5640, lng: 74.3140 },
-        { name: "Anar Kali", time: "7:30 AM", lat: 31.5679, lng: 74.3106 },
+        { name: "Anarkali", time: "7:30 AM", lat: 31.5679, lng: 74.3106 },
         { name: "Chaman Ice Cream", time: "7:32 AM", lat: 31.5710, lng: 74.3200 },
         { name: "UET Main Campus", time: "7:45 AM", lat: 31.5794, lng: 74.3562 }
       ]
@@ -781,7 +781,7 @@ const UET_DATA = {
         { name: "Raza Block", time: "6:50 AM", lat: 31.5020, lng: 74.2880 },
         { name: "Kharak Stop", time: "6:55 AM", lat: 31.5090, lng: 74.2810 },
         { name: "Liaqat chowk", time: "7:00 AM", lat: 31.5180, lng: 74.2750 },
-        { name: "Sabza Zar", time: "7:05 AM", lat: 31.5280, lng: 74.2700 },
+        { name: "Sabzazar", time: "7:05 AM", lat: 31.5280, lng: 74.2700 },
         { name: "Babu Sabu", time: "7:10 AM", lat: 31.5420, lng: 74.2760 },
         { name: "Shahdara Station", time: "7:30 AM", lat: 31.6210, lng: 74.2890 },
         { name: "New Campus (KSK)", time: "7:50 AM", lat: 31.7295, lng: 74.2985 }
@@ -809,7 +809,6 @@ const UET_DATA = {
         { name: "MAO College", time: "7:18 AM", lat: 31.5580, lng: 74.3050 },
         { name: "Secretariat", time: "7:25 AM", lat: 31.5660, lng: 74.3080 },
         { name: "Data Darbar", time: "7:30 AM", lat: 31.5780, lng: 74.3050 },
-        { name: "Sheran Wala", time: "7:36 AM", lat: 31.5850, lng: 74.3180 },
         { name: "New Campus (KSK)", time: "7:50 AM", lat: 31.7295, lng: 74.2985 }
       ]
     },
