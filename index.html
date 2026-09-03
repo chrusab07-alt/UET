@@ -22,6 +22,18 @@
   <link rel="stylesheet" href="css/styles.css">
 
   <script>
+    // Immediate Theme Initialization to avoid FOUC (Flash of Unstyled Content)
+    (function() {
+      try {
+        const savedTheme = localStorage.getItem('uet_theme');
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = savedTheme ? savedTheme : (prefersDark ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {
+        console.warn('Theme init error:', e);
+      }
+    })();
+
     window.UET_CONFIG = window.UET_CONFIG || {};
     window.UET_CONFIG.googleMapsApiKey = window.UET_CONFIG.googleMapsApiKey || '';
   </script>
@@ -81,6 +93,12 @@
             <span>Search</span>
           </button>
         </form>
+
+        <!-- Dark / Light Mode Toggle Button -->
+        <button id="theme-toggle-btn" class="theme-toggle-btn" type="button" aria-label="Toggle Dark and Light Mode" title="Toggle Dark/Light Mode">
+          <i class="lucide-moon theme-icon-moon"></i>
+          <i class="lucide-sun theme-icon-sun"></i>
+        </button>
       </div>
     </div>
   </header>
@@ -312,8 +330,8 @@
         <div>
           <div class="info-card">
             <h3 class="info-card-title"><i class="lucide-user"></i> Chairman Transport Committee</h3>
-            <div style="background:#F8FAFC; padding:1.25rem; border-radius:var(--radius-md); margin-bottom:1.25rem;">
-              <h3 style="color:var(--primary); margin-bottom:0.25rem;">Mr. M. Mushtaq</h3>
+            <div style="background:var(--bg-surface-subtle); padding:1.25rem; border-radius:var(--radius-md); margin-bottom:1.25rem; border:1px solid var(--border-light);">
+              <h3 style="color:var(--heading-color); margin-bottom:0.25rem;">Mr. M. Mushtaq</h3>
               <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:0.75rem;">Chairman, Transport Committee (UET Main & New Campus)</p>
               
               <div style="display:flex; align-items:center; gap:0.75rem; font-size:1rem; font-weight:700;">
@@ -324,12 +342,12 @@
 
             <h3 class="info-card-title"><i class="lucide-map-pin"></i> Transport Office Locations</h3>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
-              <div style="background:white; border:1px solid var(--border-light); padding:1rem; border-radius:var(--radius-md);">
-                <h4 style="color:var(--primary); margin-bottom:0.3rem;">Main Campus Office</h4>
+              <div style="background:var(--bg-surface); border:1px solid var(--border-light); padding:1rem; border-radius:var(--radius-md);">
+                <h4 style="color:var(--heading-color); margin-bottom:0.3rem;">Main Campus Office</h4>
                 <p style="font-size:0.85rem; color:var(--text-muted);">Transport Section, Near Main Auditorium & Workshop area, UET Lahore GT Road.</p>
               </div>
-              <div style="background:white; border:1px solid var(--border-light); padding:1rem; border-radius:var(--radius-md);">
-                <h4 style="color:var(--primary); margin-bottom:0.3rem;">KSK New Campus Office</h4>
+              <div style="background:var(--bg-surface); border:1px solid var(--border-light); padding:1rem; border-radius:var(--radius-md);">
+                <h4 style="color:var(--heading-color); margin-bottom:0.3rem;">KSK New Campus Office</h4>
                 <p style="font-size:0.85rem; color:var(--text-muted);">Admin Block Transport Wing, Ground Floor, UET New Campus Kala Shah Kaku.</p>
               </div>
             </div>
@@ -341,15 +359,15 @@
             <h3 class="info-card-title"><i class="lucide-message-square"></i> Send Transport Query</h3>
             <form onsubmit="event.preventDefault(); alert('Thank you! Your query has been submitted to the UET Transport Office.'); this.reset();">
               <div style="margin-bottom:0.85rem;">
-                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem;">Student Name</label>
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem; color:var(--heading-color);">Student Name</label>
                 <input type="text" required class="search-input" style="padding:0.6rem 0.8rem;" placeholder="e.g. Ali Ahmed">
               </div>
               <div style="margin-bottom:0.85rem;">
-                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem;">Registration No.</label>
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem; color:var(--heading-color);">Registration No.</label>
                 <input type="text" required class="search-input" style="padding:0.6rem 0.8rem;" placeholder="e.g. 2026-CS-101">
               </div>
               <div style="margin-bottom:0.85rem;">
-                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem;">Message / Query</label>
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.3rem; color:var(--heading-color);">Message / Query</label>
                 <textarea required rows="4" class="search-input" style="padding:0.6rem 0.8rem;" placeholder="Mention your stop or bus route query..."></textarea>
               </div>
               <button type="submit" class="btn-find-bus" style="width:100%;">
@@ -366,7 +384,7 @@
   <!-- Universal Print / Download Modal -->
   <div id="print-modal" class="modal-overlay">
     <div class="modal-content">
-      <button class="modal-close"><i class="lucide-x"></i></button>
+      <button class="modal-close" aria-label="Close modal"><i class="lucide-x"></i></button>
       <div id="print-modal-body">
         <!-- Rendered by printRouteSchedule() -->
       </div>
@@ -376,34 +394,73 @@
   <!-- Delete Confirmation Modal for Saved Routes -->
   <div id="delete-confirm-modal" class="modal-overlay">
     <div class="modal-content" style="max-width: 440px; text-align: center; padding: 2rem 1.5rem;">
-      <div style="width: 52px; height: 52px; background: #FEE2E2; color: var(--danger); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.25rem; font-size: 1.5rem;">
+      <div style="width: 52px; height: 52px; background: var(--danger-soft); color: var(--danger); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.25rem; font-size: 1.5rem;">
         <i class="lucide-trash-2"></i>
       </div>
-      <h3 style="margin-bottom: 0.5rem; font-size: 1.2rem; color: var(--text-dark);">Remove Saved Route</h3>
+      <h3 style="margin-bottom: 0.5rem; font-size: 1.2rem; color: var(--heading-color);">Remove Saved Route</h3>
       <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.5rem; line-height: 1.5;">
-        Are you sure to delete this route from your saved routes?
+        Are you sure you want to delete this route from your saved routes?
       </p>
       <div style="display: flex; gap: 0.75rem; justify-content: center;">
         <button type="button" class="btn-secondary" style="flex: 1; padding: 0.65rem 1rem; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer;" onclick="closeDeleteModal()">No</button>
-        <button type="button" style="flex: 1; padding: 0.65rem 1rem; background: var(--danger, #EF4444); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: background 0.2s;" onclick="executeDeleteFavorite()">Yes</button>
+        <button type="button" style="flex: 1; padding: 0.65rem 1rem; background: var(--danger); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: opacity 0.2s;" onclick="executeDeleteFavorite()">Yes</button>
       </div>
     </div>
   </div>
 
+  <!-- Search Loading Overlay -->
+  <div id="search-loading-overlay" class="search-loader-overlay" aria-live="polite" aria-label="Searching for bus routes" role="status">
+    <div class="search-loader-card">
+      <!-- Animated Bus Illustration -->
+      <div class="search-loader-icon-wrap">
+        <div class="search-loader-ring outer-ring"></div>
+        <div class="search-loader-ring inner-ring"></div>
+        <div class="search-loader-bus-icon">
+          <i class="lucide-bus"></i>
+        </div>
+        <!-- Orbit dots -->
+        <div class="orbit-dot dot-1"></div>
+        <div class="orbit-dot dot-2"></div>
+        <div class="orbit-dot dot-3"></div>
+      </div>
+
+      <!-- Cycling Status Messages -->
+      <div class="search-loader-message-wrap">
+        <p id="search-loader-message" class="search-loader-message">📍 Detecting your location...</p>
+      </div>
+
+      <!-- Animated Progress Bar -->
+      <div class="search-loader-progress-track">
+        <div id="search-loader-progress-bar" class="search-loader-progress-bar"></div>
+      </div>
+      <p class="search-loader-subtext">Please wait a moment…</p>
+    </div>
+  </div>
+
   <!-- Footer -->
-  <footer style="background:var(--primary-dark); color:white; padding:2rem 1.5rem; text-align:center; font-size:0.88rem; border-top:1px solid rgba(255,255,255,0.1);">
-    <div style="max-width:1280px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
-      <div style="display:flex; align-items:center; gap:0.5rem; font-weight:700;">
-        <i class="lucide-bus" style="color:var(--accent);"></i> UET BUS ROUTE INFO
+  <footer class="app-footer">
+    <div class="footer-container">
+
+      <!-- Left: Brand -->
+      <div class="footer-brand">
+        <i class="lucide-bus"></i>
+        <span>UET Bus Route Info</span>
       </div>
-      <div style="color:rgba(255,255,255,0.7);">
-        Designed for UET Lahore Students & Staff | Data Source: Transport Office Schedule
+
+      <!-- Centre: Info -->
+      <div class="footer-center">
+        <p class="footer-credit">Prepared by an Electrical Engineering Student</p>
+        <p class="footer-source">Source: Official Transport Routes</p>
       </div>
-      <div>
-        <a href="tel:03040165776" style="color:var(--accent); font-weight:600;"><i class="lucide-phone" style="font-size:0.8rem;"></i> 0304-0165776</a>
+
+      <!-- Right: Rights -->
+      <div class="footer-rights">
+        &copy; <span id="footer-year"></span> All Rights Reserved
       </div>
+
     </div>
   </footer>
+  <script>document.getElementById('footer-year').textContent = new Date().getFullYear();</script>
 
   <!-- App Data and Scripts -->
   <script src="js/data.js"></script>

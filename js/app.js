@@ -18,6 +18,170 @@ function getGoogleMapsApiKey() {
   return (window.UET_CONFIG && window.UET_CONFIG.googleMapsApiKey) || '';
 }
 
+// Theme Management (Professional Light / Dark Mode with Persistence)
+function getInitialTheme() {
+  const saved = localStorage.getItem('uet_theme');
+  if (saved === 'dark' || saved === 'light') return saved;
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(theme, save = true) {
+  document.documentElement.setAttribute('data-theme', theme);
+  if (save) {
+    localStorage.setItem('uet_theme', theme);
+  }
+  const toggleBtn = document.getElementById('theme-toggle-btn');
+  if (toggleBtn) {
+    const isDark = theme === 'dark';
+    toggleBtn.setAttribute('aria-label', isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode');
+    toggleBtn.setAttribute('title', isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode');
+  }
+  refreshLucideIcons();
+}
+
+function toggleTheme() {
+  const currentTheme = document.documentElement.getAttribute('data-theme') || getInitialTheme();
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  applyTheme(newTheme, true);
+}
+
+function initThemeToggle() {
+  const currentTheme = getInitialTheme();
+  applyTheme(currentTheme, false);
+
+  const toggleBtn = document.getElementById('theme-toggle-btn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', toggleTheme);
+  }
+
+  // OS theme change listener when no explicit saved preference
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      if (!localStorage.getItem('uet_theme')) {
+        applyTheme(e.matches ? 'dark' : 'light', false);
+      }
+    });
+  }
+}
+
+// ─── Professional Search Loader ──────────────────────────────────────────────
+const SearchLoader = (() => {
+  const MESSAGES = [
+    '📍 Detecting your location...',
+    '🚌 Finding nearby pickup points...',
+    '🗺️ Matching UET bus routes...',
+    '✅ Preparing your results...'
+  ];
+  const MIN_DURATION_MS = 1400;   // minimum visible time so fast results feel polished
+  const MSG_INTERVAL_MS = 900;    // how often the message cycles
+
+  let _msgTimer = null;
+  let _msgIndex = 0;
+  let _startTime = 0;
+  let _resolveMinTimer = null;
+  let _pendingHide = false;
+
+  function _getEl() { return document.getElementById('search-loading-overlay'); }
+  function _getMsgEl() { return document.getElementById('search-loader-message'); }
+  function _getBarEl() { return document.getElementById('search-loader-progress-bar'); }
+
+  function _setMessage(text) {
+    const el = _getMsgEl();
+    if (!el) return;
+    el.classList.add('exiting');
+    setTimeout(() => {
+      el.textContent = text;
+      el.classList.remove('exiting');
+    }, 260);
+  }
+
+  function _startMessageCycle() {
+    _msgIndex = 0;
+    _setMessage(MESSAGES[0]);
+    _msgTimer = setInterval(() => {
+      _msgIndex = (_msgIndex + 1) % MESSAGES.length;
+      _setMessage(MESSAGES[_msgIndex]);
+    }, MSG_INTERVAL_MS);
+  }
+
+  function _stopMessageCycle() {
+    if (_msgTimer) { clearInterval(_msgTimer); _msgTimer = null; }
+  }
+
+  function _disableButtons(state) {
+    ['btn-find-bus', 'btn-locate-me'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = state;
+    });
+  }
+
+  function show(type = 'find') {
+    // Reset bar so CSS animation replays
+    const bar = _getBarEl();
+    if (bar) {
+      bar.classList.remove('complete');
+      // Force reflow to restart animation
+      bar.style.animation = 'none';
+      void bar.offsetWidth;
+      bar.style.animation = '';
+    }
+
+    const overlay = _getEl();
+    if (overlay) overlay.classList.add('active');
+
+    _disableButtons(true);
+    _startTime = Date.now();
+    _pendingHide = false;
+    _startMessageCycle();
+
+    // Set first message based on action type
+    const firstMsg = type === 'gps'
+      ? '📍 Detecting your location...'
+      : '🗺️ Looking up your location...';
+    _setMessage(firstMsg);
+  }
+
+  function hide() {
+    const elapsed = Date.now() - _startTime;
+    const remaining = MIN_DURATION_MS - elapsed;
+
+    if (remaining > 0) {
+      // Wait until minimum duration is met, then hide
+      _pendingHide = true;
+      setTimeout(() => {
+        if (_pendingHide) _doHide();
+      }, remaining);
+    } else {
+      _doHide();
+    }
+  }
+
+  function _doHide() {
+    _pendingHide = false;
+    _stopMessageCycle();
+
+    // Flash to 100% progress then fade
+    const bar = _getBarEl();
+    const msgEl = _getMsgEl();
+    if (bar) bar.classList.add('complete');
+    if (msgEl) { msgEl.classList.remove('exiting'); msgEl.textContent = '✅ Preparing your results...'; }
+
+    setTimeout(() => {
+      const overlay = _getEl();
+      if (overlay) overlay.classList.remove('active');
+      _disableButtons(false);
+      // Reset bar class after fade
+      setTimeout(() => { if (bar) bar.classList.remove('complete'); }, 400);
+    }, 450);
+  }
+
+  return { show, hide };
+})();
+
+// Legacy stubs so any leftover calls don't break
+function showLoadingScreen() { SearchLoader.show(); }
+function hideLoadingScreen() { SearchLoader.hide(); }
+
 // Force refresh Lucide SVG icons in dynamic containers
 function refreshLucideIcons() {
   if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -40,6 +204,7 @@ function refreshLucideIcons() {
 
 // Initialize Application on DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
+  initThemeToggle();
   initUIEvents();
   loadGoogleMapsApi();
   renderHomePage();
@@ -432,19 +597,16 @@ function initUIEvents() {
 
 // Geolocation Handler - Uses pure browser Geolocation API coordinates
 function detectUserGeolocation() {
-  const btnLocate = document.getElementById('btn-locate-me');
   if (!navigator.geolocation) {
     alert("Geolocation is not supported by your browser. Please select a popular area.");
     return;
   }
 
-  btnLocate.innerHTML = `<i class="lucide-loader-2 spin"></i> Locating...`;
-  btnLocate.disabled = true;
+  // Show polished loading overlay immediately
+  SearchLoader.show('gps');
 
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      btnLocate.innerHTML = `<i class="lucide-crosshair"></i> Detect My Area`;
-      btnLocate.disabled = false;
       const userLat = pos.coords.latitude;
       const userLng = pos.coords.longitude;
 
@@ -454,15 +616,18 @@ function detectUserGeolocation() {
       }
 
       recommendRoutesByGps(userLat, userLng, "Your Current GPS Location", appState.selectedCampus);
+      SearchLoader.hide();
     },
     (err) => {
-      btnLocate.innerHTML = `<i class="lucide-crosshair"></i> Detect My Area`;
-      btnLocate.disabled = false;
       console.error("GPS detection error:", err);
       appState.locationSearchError = "Could not retrieve your GPS location. Please allow location access in your browser or choose a popular area below.";
       appState.recommendationResults = null;
-      renderResultPage();
-      navigateToPage('result');
+      SearchLoader.hide();
+      // Give loader time to fade, then navigate
+      setTimeout(() => {
+        renderResultPage();
+        navigateToPage('result');
+      }, 500);
     },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
   );
@@ -536,33 +701,32 @@ async function handleLocationSearch() {
     return;
   }
 
-  const btnFindBus = document.getElementById('btn-find-bus');
-  if (btnFindBus) {
-    btnFindBus.disabled = true;
-    btnFindBus.innerHTML = '<i class="lucide-loader-2 spin"></i> Searching...';
-  }
+  // Show polished loading overlay
+  SearchLoader.show('find');
 
   try {
     const geocode = await geocodeLocationQuery(rawQuery);
     if (!geocode) {
       appState.locationSearchError = `Location not recognized. Please click "Detect My Area" to use your GPS location or pick a popular area below.`;
       appState.recommendationResults = null;
-      renderResultPage();
-      navigateToPage('result');
+      SearchLoader.hide();
+      setTimeout(() => {
+        renderResultPage();
+        navigateToPage('result');
+      }, 500);
       return;
     }
 
     recommendRoutesByGps(geocode.lat, geocode.lng, geocode.formattedAddress || rawQuery, appState.selectedCampus);
+    SearchLoader.hide();
   } catch (error) {
     appState.locationSearchError = 'Location lookup failed. Please click "Detect My Area" to use your GPS location.';
     appState.recommendationResults = null;
-    renderResultPage();
-    navigateToPage('result');
-  } finally {
-    if (btnFindBus) {
-      btnFindBus.disabled = false;
-      btnFindBus.innerHTML = '<i class="lucide-search"></i> Find Bus Route';
-    }
+    SearchLoader.hide();
+    setTimeout(() => {
+      renderResultPage();
+      navigateToPage('result');
+    }, 500);
   }
 }
 
@@ -669,11 +833,11 @@ function renderResultPage() {
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
         <div>
           <span style="font-size:0.78rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Target Campus Filter:</span>
-          <div style="margin-top:0.15rem; font-weight:700; color:var(--primary); font-size:1.05rem;">
+          <div style="margin-top:0.15rem; font-weight:700; color:var(--heading-color); font-size:1.05rem;">
             ${currentCampusName}
           </div>
         </div>
-        <div class="campus-toggle-wrapper" style="margin:0; background:#F8FAFC; border:1px solid var(--border-light); padding:0.25rem;">
+        <div class="campus-toggle-wrapper" style="margin:0; background:var(--bg-surface-subtle); border:1px solid var(--border-light); padding:0.25rem;">
           <button class="route-campus-btn ${appState.selectedCampus === 'ksk' ? 'active' : ''}" data-campus="ksk" onclick="setSelectedCampus('ksk')" style="padding:0.45rem 1.1rem; font-size:0.85rem;">
             <i class="lucide-building-2"></i> KSK Campus
           </button>
@@ -758,7 +922,7 @@ function renderResultPage() {
       <div class="timeline-item ${typeClass}">
         <div>
           <div class="timeline-name">
-            ${s.name} ${badgeText ? `<span class="campus-chip" style="margin-left:0.5rem; background:${idx === stopIndex ? 'var(--accent)' : ''}; color:${idx === stopIndex ? 'var(--primary-dark)' : ''}; font-weight:700;">${badgeText}</span>` : ''}
+            ${s.name} ${badgeText ? `<span class="campus-chip" style="margin-left:0.5rem; background:${idx === stopIndex ? 'var(--accent)' : ''}; color:${idx === stopIndex ? '#061729' : ''}; font-weight:700;">${badgeText}</span>` : ''}
           </div>
           <div style="font-size:0.8rem; color:var(--text-muted);">Stop #${idx + 1}</div>
         </div>
@@ -785,11 +949,11 @@ function renderResultPage() {
             const isSelected = i === activeIdx;
             const distStr = item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)}m` : `${item.distanceKm.toFixed(2)} km`;
             return `
-              <div onclick="selectActiveRecommendation(${i})" style="cursor:pointer; background:${isSelected ? '#EFF6FF' : '#F8FAFC'}; border:2px solid ${isSelected ? 'var(--primary-light)' : 'var(--border-light)'}; border-radius:var(--radius-md); padding:0.85rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; transition:var(--transition-fast);">
+              <div onclick="selectActiveRecommendation(${i})" style="cursor:pointer; background:${isSelected ? 'var(--bg-surface-highlight)' : 'var(--bg-surface-subtle)'}; border:2px solid ${isSelected ? 'var(--primary-light)' : 'var(--border-light)'}; border-radius:var(--radius-md); padding:0.85rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; transition:var(--transition-fast);">
                 <div style="display:flex; align-items:center; gap:0.75rem;">
                   <span class="route-badge">${item.route.routeNo}</span>
                   <div>
-                    <div style="font-weight:700; color:var(--primary); font-size:0.95rem;">${item.route.name}</div>
+                    <div style="font-weight:700; color:var(--heading-color); font-size:0.95rem;">${item.route.name}</div>
                     <div style="font-size:0.82rem; color:var(--text-muted);">
                       Nearest Stop: <strong>${item.stop.name}</strong> (${item.stop.time}) &bull; ${item.route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}
                     </div>
@@ -821,10 +985,10 @@ function renderResultPage() {
           ${otherNearby.map((item) => {
             const distStr = item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)}m` : `${item.distanceKm.toFixed(2)} km`;
             return `
-              <div style="background:#F8FAFC; border:1px solid var(--border-light); border-radius:var(--radius-md); padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+              <div style="background:var(--bg-surface-subtle); border:1px solid var(--border-light); border-radius:var(--radius-md); padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem; flex-wrap:wrap;">
                 <div>
                   <span class="route-badge" style="font-size:0.78rem; padding:0.2rem 0.5rem;">${item.route.routeNo}</span>
-                  <strong style="margin-left:0.4rem; color:var(--primary); font-size:0.9rem;">${item.stop.name}</strong>
+                  <strong style="margin-left:0.4rem; color:var(--heading-color); font-size:0.9rem;">${item.stop.name}</strong>
                   <span style="font-size:0.8rem; color:var(--text-muted); margin-left:0.4rem;">(${item.stop.time})</span>
                 </div>
                 <div style="display:flex; align-items:center; gap:0.5rem;">
@@ -889,14 +1053,14 @@ function renderResultPage() {
             <span>Complete Route Stops & Morning Schedule</span>
             <span class="route-badge" style="margin-left:auto;">${route.routeNo}</span>
           </div>
-          <div style="font-size:1.1rem; font-weight:700; color:var(--primary); margin-bottom:0.4rem;">
+          <div style="font-size:1.1rem; font-weight:700; color:var(--heading-color); margin-bottom:0.4rem;">
             ${route.name}
           </div>
           <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:1rem;">
             Destination Campus: <strong>${campusLabel} (Arrival: ${route.arrivalTime})</strong>
           </p>
 
-          <h4 style="font-size:0.95rem; color:var(--primary); margin-top:1.25rem; margin-bottom:0.75rem;">
+          <h4 style="font-size:0.95rem; color:var(--heading-color); margin-top:1.25rem; margin-bottom:0.75rem;">
             <i class="lucide-list"></i> Complete Route Stops (In Order)
           </h4>
           <div class="stops-timeline">
@@ -925,7 +1089,7 @@ function renderResultPage() {
             </a>
           </div>
 
-          <div style="background:#F8FAFC; padding:0.85rem; border-radius:var(--radius-md); font-size:0.85rem; margin-bottom:1rem; border:1px solid var(--border-light);">
+          <div style="background:var(--bg-surface-subtle); padding:0.85rem; border-radius:var(--radius-md); font-size:0.85rem; margin-bottom:1rem; border:1px solid var(--border-light);">
             <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
               <span style="color:var(--text-muted);">Pickup Stop:</span>
               <strong>${stop.name} (${stop.time})</strong>
@@ -1031,14 +1195,14 @@ function renderRoutesPage() {
       <div class="info-card" id="route-card-${route.id}" style="margin-bottom:1.75rem;">
         <div class="info-card-title" style="flex-wrap:wrap; gap:0.5rem;">
           <span class="route-badge">${route.routeNo}</span>
-          <span style="font-size:1.15rem; font-weight:700; color:var(--primary);">${route.name}</span>
+          <span style="font-size:1.15rem; font-weight:700; color:var(--heading-color);">${route.name}</span>
           <span class="campus-chip" style="margin-left:auto;">${route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}</span>
         </div>
 
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:1rem; margin-bottom:1.25rem; background:#F8FAFC; padding:1rem; border-radius:var(--radius-md);">
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:1rem; margin-bottom:1.25rem; background:var(--bg-surface-subtle); border:1px solid var(--border-subtle); padding:1rem; border-radius:var(--radius-md);">
           <div>
             <div style="font-size:0.8rem; color:var(--text-muted);">Driver Name</div>
-            <div style="font-weight:700; color:var(--primary);">${route.driverName}</div>
+            <div style="font-weight:700; color:var(--heading-color);">${route.driverName}</div>
           </div>
           <div>
             <div style="font-size:0.8rem; color:var(--text-muted);">Driver Mobile</div>
@@ -1046,7 +1210,7 @@ function renderRoutesPage() {
           </div>
           <div>
             <div style="font-size:0.8rem; color:var(--text-muted);">Bus Registration No.</div>
-            <div style="font-weight:700;">${getDisplayVehicleNo(route)}</div>
+            <div style="font-weight:700; color:var(--heading-color);">${getDisplayVehicleNo(route)}</div>
           </div>
           <div>
             <div style="font-size:0.8rem; color:var(--text-muted);">Morning Campus Arrival</div>
@@ -1054,7 +1218,7 @@ function renderRoutesPage() {
           </div>
         </div>
 
-        <h4 style="font-size:0.95rem; color:var(--primary); margin-bottom:0.75rem;">
+        <h4 style="font-size:0.95rem; color:var(--heading-color); margin-bottom:0.75rem;">
           <i class="lucide-list" style="font-size:0.9rem;"></i> Morning Pickup Stops & Sequence
         </h4>
 
@@ -1071,7 +1235,7 @@ function renderRoutesPage() {
               ${route.stops.map((s, idx) => {
                 const isMatch = !!routeSearchQuery && idx === matchedIndex;
                 return `
-                  <tr class="${isMatch ? 'route-search-match' : ''}" ${isMatch ? 'data-stop-match="true"' : ''} ${idx === route.stops.length - 1 ? 'style="background:#EFF6FF; font-weight:700;"' : ''}>
+                  <tr class="${isMatch ? 'route-search-match' : ''}" ${isMatch ? 'data-stop-match="true"' : ''} ${idx === route.stops.length - 1 ? 'style="background:var(--bg-surface-highlight); font-weight:700;"' : ''}>
                     <td>${idx + 1}</td>
                     <td>
                       ${s.name}
@@ -1236,9 +1400,9 @@ function renderFavoritesPage() {
 
   if (favRoutes.length === 0) {
     container.innerHTML = `
-      <div style="text-align:center; padding:4rem 1rem; background:white; border-radius:var(--radius-lg); border:1px solid var(--border-light);">
+      <div style="text-align:center; padding:4rem 1rem; background:var(--bg-surface); border-radius:var(--radius-lg); border:1px solid var(--border-light);">
         <i class="lucide-bookmark" style="font-size:3rem; color:var(--text-light); margin-bottom:1rem;"></i>
-        <h3>No Saved Routes Yet</h3>
+        <h3 style="color:var(--heading-color);">No Saved Routes Yet</h3>
         <p style="color:var(--text-muted); margin-bottom:1.5rem;">Bookmark your daily commuting routes for 1-click access anytime!</p>
         <button class="btn-find-bus" style="margin:0 auto;" onclick="navigateToPage('home')">
           Explore Routes
@@ -1319,41 +1483,43 @@ function printRouteSchedule(routeId) {
   
   body.innerHTML = `
     <div id="printable-area" style="padding:1rem;">
-      <div style="border-bottom:2px solid var(--primary); padding-bottom:0.75rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center;">
+      <div style="border-bottom:2px solid var(--border-light); padding-bottom:0.75rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center;">
         <div>
-          <h2 style="color:var(--primary); font-size:1.5rem;">UET BUS ${route.routeNo.toUpperCase()}</h2>
+          <h2 style="color:var(--heading-color); font-size:1.5rem;">UET BUS ${route.routeNo.toUpperCase()}</h2>
           <p style="color:var(--text-muted); font-size:0.85rem;">Official Transport Morning Schedule - ${route.name}</p>
         </div>
         <span class="route-badge" style="font-size:1.1rem; padding:0.5rem 1rem;">${route.campusId === 'ksk' ? 'KSK CAMPUS' : 'MAIN CAMPUS'}</span>
       </div>
 
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem; font-size:0.9rem; background:#F8FAFC; padding:0.85rem; border-radius:8px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem; font-size:0.9rem; background:var(--bg-surface-subtle); padding:0.85rem; border-radius:8px; border:1px solid var(--border-light);">
         <div><strong>Driver:</strong> ${route.driverName}</div>
         <div><strong>Contact:</strong> ${getDisplayDriverPhone(route)}</div>
         <div><strong>Vehicle No:</strong> ${getDisplayVehicleNo(route)}</div>
         <div><strong>Morning Arrival:</strong> ${route.arrivalTime}</div>
       </div>
 
-      <table class="data-table" style="margin-bottom:1.5rem;">
-        <thead>
-          <tr>
-            <th>Stop #</th>
-            <th>Pickup Location</th>
-            <th>Scheduled Pickup Time</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${route.stops.map((s, idx) => `
+      <div class="data-table-wrapper" style="margin-bottom:1.5rem;">
+        <table class="data-table">
+          <thead>
             <tr>
-              <td>${idx + 1}</td>
-              <td>${s.name}</td>
-              <td><strong>${s.time}</strong></td>
+              <th>Stop #</th>
+              <th>Pickup Location</th>
+              <th>Scheduled Pickup Time</th>
             </tr>
-          `).join('')}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            ${route.stops.map((s, idx) => `
+              <tr>
+                <td>${idx + 1}</td>
+                <td>${s.name}</td>
+                <td><strong>${s.time}</strong></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
 
-      <div style="font-size:0.75rem; color:var(--text-muted); text-align:center; border-top:1px dashed #ccc; padding-top:0.75rem;">
+      <div style="font-size:0.75rem; color:var(--text-muted); text-align:center; border-top:1px dashed var(--border-light); padding-top:0.75rem;">
         Issued by Chairman Transport Committee UET | Contact: Mr. M. Mushtaq 0304-0165776
       </div>
     </div>
