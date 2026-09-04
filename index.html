@@ -44,10 +44,10 @@
   <header class="app-header">
     <div class="header-container">
       <a href="#home" class="brand-logo" onclick="navigateToPage('home')">
-        <i class="lucide-bus" style="color:var(--accent); font-size:1.6rem;"></i>
+        <img class="brand-logo-image" src="assets/uet-logo.png" alt="University of Engineering and Technology Lahore logo">
         <div>
           <span>UET BUS ROUTE INFO</span>
-          <span class="brand-badge">Official</span>
+          <span class="brand-badge">For UET Community</span>
         </div>
       </a>
 
@@ -85,15 +85,6 @@
       </ul>
 
       <div class="header-actions">
-        <form id="header-stop-search-form" class="header-search-form" autocomplete="off">
-          <i class="lucide-search"></i>
-          <input id="header-stop-search" type="text" placeholder="Search Stop..." aria-label="Search stop" />
-          <button type="submit" class="btn-search-trigger">
-            <i class="lucide-search"></i>
-            <span>Search</span>
-          </button>
-        </form>
-
         <!-- Dark / Light Mode Toggle Button -->
         <button id="theme-toggle-btn" class="theme-toggle-btn" type="button" aria-label="Toggle Dark and Light Mode" title="Toggle Dark/Light Mode">
           <i class="lucide-moon theme-icon-moon"></i>
@@ -103,35 +94,39 @@
     </div>
   </header>
 
-  <!-- Mobile Bottom Navigation Bar -->
-  <nav class="mobile-nav">
-    <ul class="mobile-nav-items">
-      <li>
-        <a href="#home" class="mobile-nav-item active" data-page="home">
-          <i class="lucide-home"></i>
-          <span>Home</span>
-        </a>
-      </li>
-      <li>
-        <a href="#routes" class="mobile-nav-item" data-page="routes">
-          <i class="lucide-route"></i>
-          <span>Routes</span>
-        </a>
-      </li>
-      <li>
-        <a href="#favorites" class="mobile-nav-item" data-page="favorites" onclick="renderFavoritesPage()">
-          <i class="lucide-bookmark"></i>
-          <span>Saved</span>
-        </a>
-      </li>
-      <li>
-        <a href="#contact" class="mobile-nav-item" data-page="contact">
-          <i class="lucide-phone"></i>
-          <span>Office</span>
-        </a>
-      </li>
-    </ul>
-  </nav>
+  <div class="mobile-menu-overlay" id="mobile-menu-overlay" aria-hidden="true"></div>
+
+  <aside class="mobile-menu-drawer" id="mobile-menu-drawer" aria-label="Mobile navigation">
+    <div class="mobile-menu-header">
+      <div class="mobile-menu-brand">Menu</div>
+      <button class="mobile-menu-close" type="button" aria-label="Close navigation menu">
+        <i class="lucide-x"></i>
+      </button>
+    </div>
+
+    <nav class="mobile-menu-nav" aria-label="Main navigation">
+      <a href="#home" class="mobile-menu-item active" data-page="home">
+        <i class="lucide-home"></i>
+        <span>Home</span>
+      </a>
+      <a href="#routes" class="mobile-menu-item" data-page="routes">
+        <i class="lucide-route"></i>
+        <span>Route Schedules</span>
+      </a>
+      <a href="#favorites" class="mobile-menu-item" data-page="favorites" onclick="renderFavoritesPage()">
+        <i class="lucide-bookmark"></i>
+        <span>Saved Routes</span>
+      </a>
+      <a href="#notices" class="mobile-menu-item" data-page="notices">
+        <i class="lucide-bell"></i>
+        <span>Notices &amp; FAQs</span>
+      </a>
+      <a href="#contact" class="mobile-menu-item" data-page="contact">
+        <i class="lucide-phone"></i>
+        <span>Transport Office</span>
+      </a>
+    </nav>
+  </aside>
 
   <!-- Main Content Wrapper -->
   <main class="main-wrapper">
@@ -449,7 +444,7 @@
 
       <!-- Centre: Info -->
       <div class="footer-center">
-        <p class="footer-credit">Prepared by an Electrical Engineering Student</p>
+        <p class="footer-credit">Prepared by Muhammad Rusab Chaudhary (Electrical Engineering Student)</p>
         <p class="footer-source">Source: Official Transport Routes</p>
       </div>
 

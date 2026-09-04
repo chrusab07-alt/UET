@@ -486,7 +486,7 @@ function navigateToPage(pageId) {
   }
 
   // Update nav links
-  document.querySelectorAll('.nav-btn, .mobile-nav-item').forEach(btn => {
+  document.querySelectorAll('.nav-btn, .mobile-nav-item, .mobile-menu-item').forEach(btn => {
     if (btn.dataset.page === pageId) {
       btn.classList.add('active');
     } else {
@@ -503,6 +503,46 @@ function navigateToPage(pageId) {
 }
 
 // UI Event Handlers Setup
+function closeMobileMenu() {
+  const drawer = document.getElementById('mobile-menu-drawer');
+  const overlay = document.getElementById('mobile-menu-overlay');
+  const toggle = document.querySelector('.nav-toggle');
+
+  if (drawer) {
+    drawer.classList.remove('open');
+  }
+
+  if (overlay) {
+    overlay.classList.remove('active');
+  }
+
+  document.body.classList.remove('menu-open');
+
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function openMobileMenu() {
+  const drawer = document.getElementById('mobile-menu-drawer');
+  const overlay = document.getElementById('mobile-menu-overlay');
+  const toggle = document.querySelector('.nav-toggle');
+
+  if (drawer) {
+    drawer.classList.add('open');
+  }
+
+  if (overlay) {
+    overlay.classList.add('active');
+  }
+
+  document.body.classList.add('menu-open');
+
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', 'true');
+  }
+}
+
 function initUIEvents() {
   // Navigation button clicks
   document.querySelectorAll('[data-page]').forEach(btn => {
@@ -510,22 +550,39 @@ function initUIEvents() {
       e.preventDefault();
       const page = btn.dataset.page;
       navigateToPage(page);
-      const navLinks = document.querySelector('.nav-links');
-      if (navLinks && navLinks.classList.contains('open')) {
-        navLinks.classList.remove('open');
-      }
+      closeMobileMenu();
     });
   });
 
   const navToggle = document.querySelector('.nav-toggle');
   if (navToggle) {
     navToggle.addEventListener('click', () => {
-      const navLinks = document.querySelector('.nav-links');
-      if (!navLinks) return;
-      const isOpen = navLinks.classList.toggle('open');
-      navToggle.setAttribute('aria-expanded', String(isOpen));
+      const drawer = document.getElementById('mobile-menu-drawer');
+      if (!drawer) return;
+      const isOpen = drawer.classList.contains('open');
+      if (isOpen) {
+        closeMobileMenu();
+      } else {
+        openMobileMenu();
+      }
     });
   }
+
+  const mobileMenuOverlay = document.getElementById('mobile-menu-overlay');
+  if (mobileMenuOverlay) {
+    mobileMenuOverlay.addEventListener('click', closeMobileMenu);
+  }
+
+  const mobileMenuClose = document.querySelector('.mobile-menu-close');
+  if (mobileMenuClose) {
+    mobileMenuClose.addEventListener('click', closeMobileMenu);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeMobileMenu();
+    }
+  });
 
   // Campus Toggle Buttons
   document.querySelectorAll('.campus-btn').forEach(btn => {
@@ -919,12 +976,14 @@ function renderResultPage() {
     }
 
     timelineHtml += `
-      <div class="timeline-item ${typeClass}">
-        <div>
-          <div class="timeline-name">
-            ${s.name} ${badgeText ? `<span class="campus-chip" style="margin-left:0.5rem; background:${idx === stopIndex ? 'var(--accent)' : ''}; color:${idx === stopIndex ? '#061729' : ''}; font-weight:700;">${badgeText}</span>` : ''}
+      <div class="timeline-item ${typeClass}" style="--timeline-delay:${idx * 70}ms;">
+        <div class="timeline-marker" aria-hidden="true"></div>
+        <div class="timeline-stop-content">
+          <div class="timeline-name">${s.name}</div>
+          <div class="timeline-stop-meta">
+            <span>Stop #${idx + 1}</span>
+            ${badgeText ? `<span class="timeline-status">${badgeText}</span>` : ''}
           </div>
-          <div style="font-size:0.8rem; color:var(--text-muted);">Stop #${idx + 1}</div>
         </div>
         <div class="timeline-time">${s.time}</div>
       </div>
@@ -1222,32 +1281,25 @@ function renderRoutesPage() {
           <i class="lucide-list" style="font-size:0.9rem;"></i> Morning Pickup Stops & Sequence
         </h4>
 
-        <div class="data-table-wrapper" style="margin-bottom:1rem;">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Stop #</th>
-                <th>Stop Name</th>
-                <th>Morning Pickup Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${route.stops.map((s, idx) => {
-                const isMatch = !!routeSearchQuery && idx === matchedIndex;
-                return `
-                  <tr class="${isMatch ? 'route-search-match' : ''}" ${isMatch ? 'data-stop-match="true"' : ''} ${idx === route.stops.length - 1 ? 'style="background:var(--bg-surface-highlight); font-weight:700;"' : ''}>
-                    <td>${idx + 1}</td>
-                    <td>
-                      ${s.name}
-                      ${idx === route.stops.length - 1 ? '🏁 (Campus Destination)' : ''}
-                      ${isMatch ? '<span class="route-match-badge">Matched Stop</span>' : ''}
-                    </td>
-                    <td><strong>${s.time}</strong></td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
+        <div class="stops-timeline schedule-timeline" style="margin-bottom:1rem;">
+          ${route.stops.map((s, idx) => {
+            const isMatch = !!routeSearchQuery && idx === matchedIndex;
+            const isDestination = idx === route.stops.length - 1;
+            return `
+              <div class="timeline-item ${isMatch ? 'nearest' : ''} ${isDestination ? 'destination' : ''} ${isMatch ? 'route-search-match' : ''}" style="--timeline-delay:${idx * 70}ms;" ${isMatch ? 'data-stop-match="true"' : ''}>
+                <div class="timeline-marker" aria-hidden="true"></div>
+                <div class="timeline-stop-content">
+                  <div class="timeline-name">
+                    ${s.name}
+                    ${isDestination ? '<span class="timeline-status">Campus Destination</span>' : ''}
+                    ${isMatch ? '<span class="timeline-status">Matched Stop</span>' : ''}
+                  </div>
+                  <div class="timeline-stop-meta">Stop #${idx + 1}</div>
+                </div>
+                <div class="timeline-time">${s.time}</div>
+              </div>
+            `;
+          }).join('')}
         </div>
 
         ${route.notes ? `
