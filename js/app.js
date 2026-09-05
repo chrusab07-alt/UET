@@ -1077,25 +1077,34 @@ function calculateRouteStats(routes, campuses) {
     campuses: calculateCampusStats(routes, campuses) };
 }
 
+function formatCampusArrivalSummary(campus) {
+  if (!campus.arrivalTimes || !campus.arrivalTimes.length) return '';
+  if (campus.id === 'ksk' || campus.arrivalTimes.length === 1) {
+    return `Arrival: ${campus.arrivalTimes[0]}`;
+  }
+  const compactTimes = campus.arrivalTimes.map(time => time.replace(/\s*AM$/i, ''));
+  return `Arrivals: ${compactTimes.join(' • ')}`;
+}
+
 function renderHomeStats() {
   const container = document.getElementById('home-stats');
   if (!container) return;
   const stats = calculateRouteStats(UET_DATA.routes, UET_DATA.campuses);
   const cards = [
     {icon:'bus', value:stats.totalRoutes, label:'Total Routes'},
-    {icon:'map-pin', value:stats.uniqueStops, label:'Unique Stop Names'}
+    {icon:'map-pin', value:stats.uniqueStops, label:'Unique Stops'}
   ];
   stats.campuses.forEach(campus => cards.push({
     icon:'graduation-cap', value:campus.routeCount, label:`${campus.name} Routes`,
-    detail:campus.arrivalTimes.length ? `Scheduled arrival: ${campus.arrivalTimes.join(' / ')}` : ''
+    detail: formatCampusArrivalSummary(campus)
   }));
   container.innerHTML = cards.map(card => `
     <div class="stat-card">
       <div class="stat-icon"><i class="lucide-${card.icon}"></i></div>
-      <div>
+      <div class="stat-content">
         <div class="stat-val">${card.value}</div>
-        <div class="stat-lbl">${card.label}</div>
-        ${card.detail ? `<div class="stat-lbl">${card.detail}</div>` : ''}
+        <div class="stat-lbl stat-title">${card.label}</div>
+        ${card.detail ? `<div class="stat-lbl stat-detail">${card.detail}</div>` : ''}
       </div>
     </div>
   `).join('');

@@ -1057,6 +1057,7 @@ body.menu-open {
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-auto-rows: 1fr;
   gap: 1rem;
   margin-bottom: 2.5rem;
 }
@@ -1065,36 +1066,71 @@ body.menu-open {
   background: var(--bg-surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
-  padding: 1.25rem;
+  padding: 1.15rem 1rem;
   display: flex;
-  align-items: center;
-  gap: 1rem;
+  align-items: flex-start;
+  gap: 0.85rem;
   box-shadow: var(--shadow-sm);
   transition: var(--theme-transition);
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .stat-icon {
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
   border-radius: var(--radius-md);
   background: var(--bg-surface-highlight);
   color: var(--primary-light);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.4rem;
+  font-size: 1.35rem;
+}
+
+.stat-content {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .stat-val {
   font-size: 1.5rem;
   font-weight: 800;
+  line-height: 1.15;
   color: var(--heading-color);
   transition: color 0.3s ease;
+  margin-bottom: 0.2rem;
 }
 
 .stat-lbl {
   font-size: 0.82rem;
+  line-height: 1.25;
   color: var(--text-muted);
+}
+
+.stat-detail {
+  margin-top: 0.25rem;
+  font-size: 0.74rem;
+  letter-spacing: -0.01em;
+  color: var(--text-muted);
+}
+
+@media (min-width: 821px) {
+  .stat-card {
+    padding: 1.15rem 0.85rem;
+    gap: 0.75rem;
+  }
+  .stat-icon {
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+  }
+  .stat-detail {
+    white-space: nowrap;
+  }
 }
 
 /* Route Cards Grid */
