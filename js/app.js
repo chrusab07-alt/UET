@@ -223,14 +223,6 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshLucideIcons();
 });
 
-/**
- * initGoogleLocationSearch – intentionally a no-op.
- * The homepage search is powered entirely by the local UET bus-stop dataset.
- * Google Places / Autocomplete API is not used for this search field.
- * This function is kept so that test harnesses which call it do not throw.
- */
-function initGoogleLocationSearch() { /* local stop-search only */ }
-
 // Calculate Haversine Distance (in kilometers) between two GPS points
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // Earth radius in km
