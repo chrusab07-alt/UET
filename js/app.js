@@ -4,7 +4,9 @@ let appState = {
   selectedCampus: 'ksk', // 'ksk' or 'main'
   currentLocation: null, // { lat, lng, name, formattedAddress, placeId, source }
   selectedPlace: null,
-  recommendationResults: null, // { status: 'within_500m' | 'nearest' | 'none', matchingRoutes, allNearby, userLat, userLng, locationLabel, targetCampus }
+  selectedStopSuggestion: null,
+  highlightedStop: null,
+  recommendationResults: null, // { status: 'within_radius' | 'nearest' | 'none', matchingRoutes, allNearby, userLat, userLng, locationLabel, targetCampus }
   activeRecommendationIndex: 0,
   locationSearchError: null,
   activePage: 'home',
@@ -12,10 +14,21 @@ let appState = {
   favorites: JSON.parse(localStorage.getItem('uet_fav_routes') || '[]'),
   selectedRouteId: null,
   routeListScrollY: 0,
+  routeListState: null, // campus, query and scroll position before opening details
   map: null,
   markers: []
 };
 
+// Normalize display labels without changing stored route numbers or route IDs.
+function formatRouteLabel(routeNo) {
+  const number = String(routeNo ?? '').trim().replace(/^(?:route\b\s*)+/i, '').trim();
+  return number ? `Route ${number}` : 'Route';
+}
+// Haversine distances are straight-line estimates, not walking routes or durations.
+function formatDistance(distanceKm) {
+  if (!Number.isFinite(distanceKm) || distanceKm < 0) return 'Unavailable';
+  return distanceKm < 1 ? `${Math.round(distanceKm * 1000)} m` : `${distanceKm.toFixed(2)} km`;
+}
 function getGoogleMapsApiKey() {
   return (window.UET_CONFIG && window.UET_CONFIG.googleMapsApiKey) || '';
 }
@@ -182,6 +195,7 @@ function refreshLucideIcons() {
   if (window.lucide && typeof window.lucide.createIcons === 'function') {
     const iconEls = document.querySelectorAll('i[class*="lucide-"]');
     iconEls.forEach(icon => {
+      icon.setAttribute('aria-hidden', 'true');
       const name = Array.from(icon.classList).find(cls => cls.startsWith('lucide-'));
       if (name && !icon.hasAttribute('data-lucide')) {
         icon.setAttribute('data-lucide', name.replace(/^lucide-/, ''));
@@ -201,7 +215,6 @@ function refreshLucideIcons() {
 document.addEventListener('DOMContentLoaded', () => {
   initThemeToggle();
   initUIEvents();
-  loadGoogleMapsApi();
   renderHomePage();
   renderRoutesPage();
   renderFaqs();
@@ -209,6 +222,14 @@ document.addEventListener('DOMContentLoaded', () => {
   handleUrlRouting();
   refreshLucideIcons();
 });
+
+/**
+ * initGoogleLocationSearch – intentionally a no-op.
+ * The homepage search is powered entirely by the local UET bus-stop dataset.
+ * Google Places / Autocomplete API is not used for this search field.
+ * This function is kept so that test harnesses which call it do not throw.
+ */
+function initGoogleLocationSearch() { /* local stop-search only */ }
 
 // Calculate Haversine Distance (in kilometers) between two GPS points
 function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -223,21 +244,19 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-/**
- * Shared coordinate-based UET pickup recommendation algorithm.
- * 
- * Workflow:
- * 1. User selects campus (Main or KSK).
- * 2. Filter the route database to ONLY that selected campus (First Filter).
- * 3. Calculate distance from user's GPS coordinates to every stop in those filtered routes.
- * 4. Keep every qualifying stop as an independent pickup candidate.
- * 5. If multiple stops are within 500 meters (0.5 km) for that campus, return all matching stops sorted by distance.
- * 6. If no stops are within 500m, but stops exist within 5 km, recommend the nearest stop from that campus.
- * 7. If no stop found within 5 km for that campus, returns status: 'none' -> "No nearby UET bus stop found."
- */
-function findNearbyRoutes(userLat, userLng, campusFilter) {
-  const MAX_RADIUS_KM = 5.0;       // 5 km max radius
-  const NEARBY_THRESHOLD_KM = 0.5;   // 500 meters threshold
+// Pickup selection policy (kilometers). Adjust these named limits together.
+const NEARBY_ROUTE_CONFIG = Object.freeze({
+  nearbyRadiusKm: 0.5,
+  fallbackDistanceGapKm: 0.15,
+  maxPickupDistanceKm: 1.0
+});
+
+/** Find individual campus pickup stops, preserving multiple stops on one route. */function findNearbyRoutes(userLat, userLng, campusFilter, config = NEARBY_ROUTE_CONFIG) {
+  const { nearbyRadiusKm, fallbackDistanceGapKm, maxPickupDistanceKm } = config;
+  if (![nearbyRadiusKm, fallbackDistanceGapKm, maxPickupDistanceKm].every(value => Number.isFinite(value) && value >= 0) ||
+      maxPickupDistanceKm < nearbyRadiusKm || maxPickupDistanceKm === 0) {
+    return { status: 'error', error: 'Invalid nearby pickup configuration.', matchingRoutes: [], allNearby: [] };
+  }
   const latitude = userLat;
   const longitude = userLng;
   const targetCampus = (campusFilter || '').toString().toLowerCase();
@@ -277,7 +296,7 @@ function findNearbyRoutes(userLat, userLng, campusFilter) {
       }
 
       const dist = calculateDistance(latitude, longitude, stop.lat, stop.lng);
-      if (dist <= MAX_RADIUS_KM) {
+      if (Number.isFinite(dist)) {
         stopCandidates.push({
         route: route,
         stop: stop,
@@ -291,36 +310,24 @@ function findNearbyRoutes(userLat, userLng, campusFilter) {
   // Sort individual pickup stops by distance, not routes.
   stopCandidates.sort((a, b) => a.distanceKm - b.distanceKm);
 
-  if (stopCandidates.length === 0) {
-    return {
-      status: 'none',
-      targetCampus: targetCampus,
-      matchingRoutes: [],
-      allNearby: []
-    };
+  const nearestStop = stopCandidates[0] || null;
+  if (!nearestStop || nearestStop.distanceKm > maxPickupDistanceKm) {
+    return { status: 'none', targetCampus, nearestStop, matchingRoutes: [], allNearby: [], maxPickupDistanceKm };
   }
 
-  // Filter stops within 500 meters; multiple stops from one route remain visible.
-  const within500m = stopCandidates.filter(item => item.distanceKm <= NEARBY_THRESHOLD_KM);
-
-  if (within500m.length > 0) {
-    return {
-      status: 'within_500m',
-      targetCampus: targetCampus,
-      matchingRoutes: within500m,
-      allNearby: stopCandidates
-    };
-  }
-
-  // Fallback: nearest individual stop within 5 km from the selected campus.
+  const hasStopsInRadius = nearestStop.distanceKm <= nearbyRadiusKm;
+  const selectionRadiusKm = hasStopsInRadius
+    ? nearbyRadiusKm
+    : Math.min(maxPickupDistanceKm, nearestStop.distanceKm + fallbackDistanceGapKm);
+  const matchingRoutes = stopCandidates.filter(item => item.distanceKm <= selectionRadiusKm);
   return {
-    status: 'nearest',
-    targetCampus: targetCampus,
-    matchingRoutes: [stopCandidates[0]],
-    allNearby: stopCandidates
+    status: hasStopsInRadius ? 'within_radius' : 'nearest',
+    targetCampus, nearestStop, selectionRadiusKm, nearbyRadiusKm, maxPickupDistanceKm,
+    matchingRoutes,
+    // Only expose relevant candidates: no separate broad-radius list of distant stops.
+    allNearby: matchingRoutes
   };
 }
-
 function runNearbyRouteSearch(latitude, longitude, location, source) {
   SearchLoader.show();
   try {
@@ -340,6 +347,7 @@ function runNearbyRouteSearch(latitude, longitude, location, source) {
       source: source
     };
     appState.selectedPlace = source === 'google' ? { ...location } : null;
+    if (source !== 'stop-search') appState.highlightedStop = null;
     appState.locationSearchError = null;
     appState.activeRecommendationIndex = 0;
     appState.recommendationResults = {
@@ -361,81 +369,226 @@ function runNearbyRouteSearch(latitude, longitude, location, source) {
 function showLocationSearchError(message) {
   appState.currentLocation = null;
   appState.selectedPlace = null;
+  appState.selectedStopSuggestion = null;
+  appState.highlightedStop = null;
   appState.locationSearchError = message;
   appState.recommendationResults = null;
   renderResultPage();
   navigateToPage('result');
 }
 
-function loadGoogleMapsApi() {
-  const apiKey = getGoogleMapsApiKey();
-  if (!apiKey) {
-    return;
-  }
+const STOP_SEARCH_MIN_CHARS = 1;
+const STOP_SEARCH_MAX_RESULTS = 10;
+let stopSearchActiveIndex = -1;
+let stopSearchVisibleMatches = [];
 
-  if (window.google && window.google.maps && window.google.maps.places) {
-    initGoogleLocationSearch();
-    return;
-  }
-
-  if (document.querySelector('script[data-google-maps="uet"]')) {
-    return;
-  }
-
-  window.__uetGoogleMapsReady = function () {
-    initGoogleLocationSearch();
-  };
-
-  const script = document.createElement('script');
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=window.__uetGoogleMapsReady`;
-  script.async = true;
-  script.defer = true;
-  script.setAttribute('data-google-maps', 'uet');
-  document.head.appendChild(script);
+function setStopSearchStatus(message) {
+  const status = document.getElementById('stop-search-status');
+  if (status) status.textContent = message;
 }
 
-function initGoogleLocationSearch() {
+function getCampusShortName(campusId) {
+  const campus = UET_DATA.campuses.find(item => item.id === campusId);
+  if (campus?.shortName) return campus.shortName;
+  return campusId === 'ksk' ? 'KSK Campus' : 'Main Campus';
+}
+
+function buildUetStopSearchIndex(campusId = null) {
+  const routes = campusId
+    ? UET_DATA.routes.filter(route => route.campusId === campusId)
+    : UET_DATA.routes.slice();
+  const index = [];
+  routes.forEach(route => {
+    (route.stops || []).forEach((stop, stopIndex) => {
+      index.push({
+        key: `${route.campusId}|${route.id}|${stopIndex}`,
+        campusId: route.campusId,
+        campusLabel: getCampusShortName(route.campusId),
+        routeId: route.id,
+        routeNo: route.routeNo,
+        routeName: route.name || '',
+        startPoint: route.startPoint || '',
+        stopIndex,
+        stopName: stop.name,
+        aliases: Array.isArray(stop.aliases) ? stop.aliases : [],
+        time: stop.time,
+        driverName: route.driverName,
+        driverPhone: route.driverPhone,
+        vehicleNo: route.vehicleNo,
+        arrivalTime: route.arrivalTime
+      });
+    });
+  });
+  return index;
+}
+
+function getStopSearchRank(entry, query) {
+  const normalizedQuery = normalizeStopSearchText(query);
+  if (!normalizedQuery) return 0;
+  const compactQuery = normalizedQuery.replace(/\s/g, '');
+  const name = normalizeStopSearchText(entry.stopName);
+  const compactName = name.replace(/\s/g, '');
+  const aliasNorms = (entry.aliases || []).map(alias => {
+    const normalized = normalizeStopSearchText(alias);
+    return { normalized, compact: normalized.replace(/\s/g, '') };
+  });
+  if (name === normalizedQuery || compactName === compactQuery) return 1;
+  if (name.startsWith(normalizedQuery) || compactName.startsWith(compactQuery)) return 2;
+  if (aliasNorms.some(alias => alias.normalized.startsWith(normalizedQuery) || alias.compact.startsWith(compactQuery))) return 3;
+  if (name.includes(normalizedQuery) || compactName.includes(compactQuery)) return 4;
+  if (aliasNorms.some(alias => alias.normalized.includes(normalizedQuery) || alias.compact.includes(compactQuery))) return 5;
+  return 0;
+}
+
+function searchUetStops(query, campusId = null, limit = STOP_SEARCH_MAX_RESULTS) {
+  const normalizedQuery = normalizeStopSearchText(query);
+  if (normalizedQuery.length < STOP_SEARCH_MIN_CHARS) return [];
+  return buildUetStopSearchIndex(campusId)
+    .map(entry => ({ ...entry, rank: getStopSearchRank(entry, query) }))
+    .filter(entry => entry.rank > 0)
+    .sort((a, b) => a.rank - b.rank
+      || String(a.routeNo).localeCompare(String(b.routeNo), undefined, { numeric: true })
+      || a.stopIndex - b.stopIndex)
+    .slice(0, limit);
+}
+
+function getStopSearchDropdown() {
+  return document.getElementById('stop-search-suggestions');
+}
+
+function closeStopSearchDropdown() {
+  const dropdown = getStopSearchDropdown();
   const input = document.getElementById('main-location-input');
-  if (!input || !window.google || !window.google.maps || !window.google.maps.places) {
-    return;
+  stopSearchActiveIndex = -1;
+  if (dropdown) {
+    dropdown.hidden = true;
+    dropdown.innerHTML = '';
   }
-
-  if (input.dataset.googleAutocompleteBound === 'true') {
-    return;
+  if (input) {
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
   }
+}
 
-  const autocomplete = new window.google.maps.places.Autocomplete(input, {
-    componentRestrictions: { country: 'pk' },
-    fields: ['place_id', 'name', 'formatted_address', 'geometry']
+function setStopSearchActiveIndex(index) {
+  const dropdown = getStopSearchDropdown();
+  if (!dropdown || dropdown.hidden) return;
+  const options = [...dropdown.querySelectorAll('[role="option"]')];
+  if (!options.length) return;
+  stopSearchActiveIndex = ((index % options.length) + options.length) % options.length;
+  options.forEach((option, optionIndex) => {
+    const isActive = optionIndex === stopSearchActiveIndex;
+    option.setAttribute('aria-selected', String(isActive));
+    option.classList.toggle('is-active', isActive);
   });
+  const active = options[stopSearchActiveIndex];
+  const input = document.getElementById('main-location-input');
+  if (input) input.setAttribute('aria-activedescendant', active.id);
+  active.scrollIntoView({ block: 'nearest' });
+}
 
-  autocomplete.addListener('place_changed', () => {
-    const place = autocomplete.getPlace();
-    const loc = place && place.geometry && place.geometry.location;
-    if (!loc || typeof loc.lat !== 'function' || typeof loc.lng !== 'function') {
-      showLocationSearchError('Place details are unavailable. Please select a location from the suggestions or use "Detect My Area".');
-      return;
-    }
+function renderStopSearchDropdown(matches, query) {
+  const dropdown = getStopSearchDropdown();
+  const input = document.getElementById('main-location-input');
+  if (!dropdown || !input) return;
+  stopSearchVisibleMatches = matches;
+  const normalizedQuery = normalizeStopSearchText(query);
+  if (normalizedQuery.length < STOP_SEARCH_MIN_CHARS) {
+    closeStopSearchDropdown();
+    setStopSearchStatus('Search a UET bus stop by name.');
+    return;
+  }
+  if (!matches.length) {
+    dropdown.innerHTML = '<li class="stop-search-empty" role="status">No matching UET bus stop found.</li>';
+    dropdown.hidden = false;
+    stopSearchActiveIndex = -1;
+    input.setAttribute('aria-expanded', 'true');
+    input.removeAttribute('aria-activedescendant');
+    setStopSearchStatus('No matching UET bus stop found.');
+    return;
+  }
+  dropdown.innerHTML = matches.map((match, index) => `
+    <li>
+      <button type="button" class="stop-search-option" role="option" id="stop-search-option-${index}"
+        data-stop-key="${match.key}" aria-selected="false">
+        <span class="stop-search-option-main">
+          <i class="lucide-bus" aria-hidden="true"></i>
+          <span class="stop-search-option-text">
+            <span class="stop-search-option-name">${match.stopName}</span>
+            <span class="stop-search-option-meta">${formatRouteLabel(match.routeNo)} &bull; ${match.campusLabel}</span>
+          </span>
+        </span>
+      </button>
+    </li>
+  `).join('');
+  dropdown.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  setStopSearchActiveIndex(0);
+  setStopSearchStatus(`${matches.length} matching UET bus stop${matches.length === 1 ? '' : 's'}.`);
+  refreshLucideIcons();
+}
 
-    const lat = loc.lat();
-    const lng = loc.lng();
-    const selectedPlace = {
-      name: place.name || input.value.trim(),
-      formattedAddress: place.formatted_address || input.value.trim(),
-      lat,
-      lng,
-      placeId: place.place_id || null
-    };
-    if (!hasValidSelectedPlace(selectedPlace)) {
-      showLocationSearchError('Place details are unavailable. Please select a location from the suggestions or use "Detect My Area".');
-      return;
+function updateStopSearchSuggestions() {
+  const input = document.getElementById('main-location-input');
+  if (!input) return;
+  const query = input.value;
+  appState.selectedStopSuggestion = null;
+  const matches = searchUetStops(query, appState.selectedCampus);
+  renderStopSearchDropdown(matches, query);
+}
+
+function applySelectedUetStop(entry) {
+  if (!entry) return;
+  const route = UET_DATA.routes.find(item => item.id === entry.routeId);
+  const stop = route?.stops?.[entry.stopIndex];
+  if (!route || !stop) return;
+
+  const input = document.getElementById('main-location-input');
+  if (input) input.value = stop.name;
+  closeStopSearchDropdown();
+  appState.selectedStopSuggestion = entry;
+  appState.selectedPlace = null;
+  appState.locationSearchError = null;
+  appState.currentLocation = {
+    name: stop.name,
+    formattedAddress: stop.name,
+    source: 'stop-search'
+  };
+  appState.highlightedStop = { routeId: route.id, stopIndex: entry.stopIndex };
+  appState.activeRecommendationIndex = 0;
+  appState.recommendationResults = {
+    status: 'exact_stop',
+    source: 'stop-search',
+    matchingRoutes: [{ route, stop, stopIndex: entry.stopIndex }],
+    allNearby: [],
+    locationLabel: stop.name,
+    campus: route.campusId
+  };
+  setStopSearchStatus('Select a UET bus stop to view its route.');
+  renderResultPage();
+  navigateToPage('result');
+}
+
+function handleStopSearchKeydown(event) {
+  const dropdown = getStopSearchDropdown();
+  if (event.key === 'Escape') {
+    closeStopSearchDropdown();
+    return;
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (!dropdown || dropdown.hidden || !stopSearchVisibleMatches.length) {
+      updateStopSearchSuggestions();
     }
-    appState.selectedPlace = selectedPlace;
-    input.value = selectedPlace.formattedAddress;
+    if (!stopSearchVisibleMatches.length) return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowDown' ? 1 : -1;
+    setStopSearchActiveIndex(stopSearchActiveIndex < 0 ? 0 : stopSearchActiveIndex + delta);
+    return;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
     handleLocationSearch();
-  });
-
-  input.dataset.googleAutocompleteBound = 'true';
+  }
 }
 
 function getDisplayDriverPhone(route) {
@@ -446,20 +599,43 @@ function getDisplayVehicleNo(route) {
   return route && route.campusId === 'main' ? 'N/A' : (route?.vehicleNo || 'N/A');
 }
 
-function setSelectedCampus(campusId) {
+function setSelectedCampus(campusId, { updateHistory = true } = {}) {
+  const campusChanged = appState.selectedCampus !== campusId;
   appState.selectedCampus = campusId;
+  const selectedRoute = UET_DATA.routes.find(route => route.id === appState.selectedRouteId);
+  if (appState.selectedRouteId && (!selectedRoute || selectedRoute.campusId !== campusId)) {
+    appState.selectedRouteId = null;
+  }
+  if (campusChanged) {
+    // A previous campus's Back snapshot must not restore its route list later.
+    appState.routeListState = null;
+    appState.routeListScrollY = 0;
+    if (appState.selectedStopSuggestion && appState.selectedStopSuggestion.campusId !== campusId) {
+      appState.selectedStopSuggestion = null;
+    }
+  }
 
   document.querySelectorAll('.campus-btn, .route-campus-btn, .result-campus-btn').forEach(btn => {
     const isActive = btn.dataset.campus === campusId;
     btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   });
 
   renderHomePage();
   renderRoutesPage();
+  if (updateHistory) saveNavigationEntry(true);
+  if (document.getElementById('main-location-input')?.value) updateStopSearchSuggestions();
 
   // If on result page with an active location, re-run recommendation with new campus filter
   if (appState.currentLocation && appState.activePage === 'result') {
     const location = appState.currentLocation;
+    if (location.source === 'stop-search') {
+      const matches = searchUetStops(location.name, campusId);
+      const exact = matches.find(match => normalizeStopSearchText(match.stopName) === normalizeStopSearchText(location.name));
+      if (exact) applySelectedUetStop(exact);
+      else showLocationSearchError('No matching UET bus stop found.');
+      return;
+    }
     runNearbyRouteSearch(location.lat, location.lng, {
       name: location.name,
       formattedAddress: location.formattedAddress || location.name,
@@ -471,8 +647,16 @@ function setSelectedCampus(campusId) {
 }
 
 // Navigation & Tab Switching
-function navigateToPage(pageId) {
+function navigateToPage(pageId, { resetScroll = true, updateHistory = true, routeId = null, fromRouteList = false } = {}) {
+  if (updateHistory) saveNavigationEntry(true);
+  if (pageId === 'routes') {
+    const route = UET_DATA.routes.find(item => item.id === routeId);
+    if (route) setSelectedCampus(route.campusId, { updateHistory: false });
+    appState.selectedRouteId = route?.id || null;
+    renderRoutesPage();
+  }
   appState.activePage = pageId;
+  if (pageId === 'routes' && routeId) document.querySelector?.('.route-back-button')?.focus({preventScroll:true});
   document.querySelectorAll('.page-section').forEach(sec => {
     sec.classList.remove('active');
   });
@@ -496,17 +680,75 @@ function navigateToPage(pageId) {
   }
 
   refreshLucideIcons();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (updateHistory) saveNavigationEntry(false, fromRouteList, resetScroll ? 0 : window.scrollY);
+  if (resetScroll) window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// Shared modal focus management for dialogs and the mobile navigation drawer.
+let activeAccessibleLayer = null;
+function layerFocusableElements(root) {
+  return [...root.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter(element => element.getClientRects().length && !element.closest('[inert], [hidden]'));
+}
+function openAccessibleLayer(root, initialFocus) {
+  if (!root || !document.body) return;
+  if (activeAccessibleLayer) closeAccessibleLayer(false);
+  const trigger = document.activeElement;
+  root.inert = false;
+  root.setAttribute('aria-hidden', 'false');
+  const siblings = [...document.body.children].filter(element => element !== root &&
+    element.id !== 'mobile-menu-overlay' && !['SCRIPT','STYLE'].includes(element.tagName));
+  const previousInert = siblings.map(element => [element, element.inert]);
+  // Move focus before making the background inert.
+  (initialFocus || layerFocusableElements(root)[0] || root).focus({preventScroll:true});
+  siblings.forEach(element => { element.inert = true; });
+  activeAccessibleLayer = {root, trigger, previousInert};
+}
+function closeAccessibleLayer(restoreFocus = true) {
+  if (!activeAccessibleLayer) return;
+  const {root, trigger, previousInert} = activeAccessibleLayer;
+  activeAccessibleLayer = null;
+  if (root.contains(document.activeElement)) document.activeElement.blur();
+  root.setAttribute('aria-hidden', 'true');
+  root.inert = true;
+  previousInert.forEach(([element, inert]) => { element.inert = inert; });
+  if (restoreFocus) setTimeout(() => {
+    const target = trigger?.isConnected && trigger.getClientRects().length
+      ? trigger : document.querySelector('.page-section.active button, .page-section.active a[href], .nav-toggle');
+    target?.focus({preventScroll:true});
+  }, 0);
+}
+function handleLayerKeydown(event) {
+  if (!activeAccessibleLayer) return;
+  const root = activeAccessibleLayer.root;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    root.id === 'mobile-menu-drawer' ? closeMobileMenu() : closeModal();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const controls = layerFocusableElements(root);
+  const first = controls[0], last = controls[controls.length - 1];
+  if (!first) { event.preventDefault(); root.focus(); return; }
+  const current = document.activeElement;
+  if (event.shiftKey && (current === first || !controls.includes(current))) {
+    event.preventDefault(); last.focus();
+  } else if (!event.shiftKey && (current === last || !controls.includes(current))) {
+    event.preventDefault(); first.focus();
+  }
 }
 
 // UI Event Handlers Setup
 function closeMobileMenu() {
+  if (activeAccessibleLayer?.root.id === 'mobile-menu-drawer') closeAccessibleLayer();
   const drawer = document.getElementById('mobile-menu-drawer');
   const overlay = document.getElementById('mobile-menu-overlay');
   const toggle = document.querySelector('.nav-toggle');
 
   if (drawer) {
     drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden', 'true');
+    drawer.inert = true;
   }
 
   if (overlay) {
@@ -538,6 +780,7 @@ function openMobileMenu() {
   if (toggle) {
     toggle.setAttribute('aria-expanded', 'true');
   }
+  openAccessibleLayer(drawer, drawer?.querySelector('.mobile-menu-close'));
 }
 
 function initUIEvents() {
@@ -575,10 +818,9 @@ function initUIEvents() {
     mobileMenuClose.addEventListener('click', closeMobileMenu);
   }
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      closeMobileMenu();
-    }
+  document.addEventListener('keydown', handleLayerKeydown);
+  window.addEventListener?.('resize', () => {
+    if (window.innerWidth > 900 && activeAccessibleLayer?.root.id === 'mobile-menu-drawer') closeMobileMenu();
   });
 
   // Campus Toggle Buttons
@@ -594,19 +836,31 @@ function initUIEvents() {
     setSelectedCampus(campusBtn.dataset.campus);
   });
 
-  // Location Search Box Input
+  // Homepage UET bus-stop autocomplete (local dataset only)
   const mainSearchInput = document.getElementById('main-location-input');
   if (mainSearchInput) {
-    mainSearchInput.addEventListener('input', () => {
-      appState.selectedPlace = null;
-    });
-    mainSearchInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        handleLocationSearch();
-      }
+    mainSearchInput.addEventListener('input', updateStopSearchSuggestions);
+    mainSearchInput.addEventListener('keydown', handleStopSearchKeydown);
+    mainSearchInput.addEventListener('focus', () => {
+      if (normalizeStopSearchText(mainSearchInput.value)) updateStopSearchSuggestions();
     });
   }
+
+  const stopSearchDropdown = document.getElementById('stop-search-suggestions');
+  if (stopSearchDropdown) {
+    stopSearchDropdown.addEventListener('mousedown', (e) => e.preventDefault());
+    stopSearchDropdown.addEventListener('click', (e) => {
+      const option = e.target.closest('[data-stop-key]');
+      if (!option) return;
+      const match = stopSearchVisibleMatches.find(item => item.key === option.dataset.stopKey);
+      if (match) applySelectedUetStop(match);
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#main-location-input, #stop-search-suggestions, .location-search-field')) return;
+    closeStopSearchDropdown();
+  });
 
   // Find Bus Button
   const btnFindBus = document.getElementById('btn-find-bus');
@@ -658,7 +912,7 @@ function initUIEvents() {
 // Geolocation Handler - Uses pure browser Geolocation API coordinates
 function detectUserGeolocation() {
   if (!navigator.geolocation) {
-    showLocationSearchError('Geolocation is not supported by your browser. Please select a Google place.');
+    showLocationSearchError('Geolocation is not supported by your browser. Please search a UET bus stop.');
     return;
   }
 
@@ -677,10 +931,10 @@ function detectUserGeolocation() {
     },
     (err) => {
       const message = err.code === 1
-        ? 'Location permission was denied. Please allow access or select a Google place.'
+        ? 'Location permission was denied. Please allow access or search a UET bus stop.'
         : err.code === 3
-          ? 'Location detection timed out. Please try again or select a Google place.'
-          : 'Your location is unavailable. Please try again or select a Google place.';
+          ? 'Location detection timed out. Please try again or search a UET bus stop.'
+          : 'Your location is unavailable. Please try again or search a UET bus stop.';
       SearchLoader.hide();
       showLocationSearchError(message);
     },
@@ -688,7 +942,24 @@ function detectUserGeolocation() {
   );
 }
 function normalizeStopSearchText(value) {
-  return (value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (typeof value !== 'string') return '';
+  return value.normalize('NFKC').toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().replace(/\s+/g, ' ');
+}
+
+// Shared by exact header lookup and partial Route Schedules filtering.
+function stopMatchesSearch(stop, query, { exact = false } = {}) {
+  const normalizedQuery = normalizeStopSearchText(query);
+  if (!normalizedQuery) return false;
+  const compactQuery = normalizedQuery.replace(/\s/g, '');
+  const names = [stop.name, ...(Array.isArray(stop.aliases) ? stop.aliases : [])];
+  return names.some(name => {
+    const normalizedName = normalizeStopSearchText(name);
+    const compactName = normalizedName.replace(/\s/g, '');
+    return exact
+      ? compactName === compactQuery
+      : normalizedName.includes(normalizedQuery) || compactName.includes(compactQuery);
+  });
 }
 
 function findExactStopMatches(query, preferredCampusId = null) {
@@ -698,7 +969,7 @@ function findExactStopMatches(query, preferredCampusId = null) {
   }
 
   const preferredMatches = preferredCampusId
-    ? UET_DATA.routes.filter(route => route.campusId === preferredCampusId && route.stops.some(stop => normalizeStopSearchText(stop.name) === normalizedQuery))
+    ? UET_DATA.routes.filter(route => route.campusId === preferredCampusId && route.stops.some(stop => stopMatchesSearch(stop, normalizedQuery, { exact: true })))
     : [];
 
   if (preferredMatches.length > 0) {
@@ -706,7 +977,7 @@ function findExactStopMatches(query, preferredCampusId = null) {
   }
 
   return UET_DATA.routes.filter(route =>
-    route.stops.some(stop => normalizeStopSearchText(stop.name) === normalizedQuery)
+    route.stops.some(stop => stopMatchesSearch(stop, normalizedQuery, { exact: true }))
   );
 }
 
@@ -722,11 +993,12 @@ function handleHeaderStopSearch() {
   appState.routeScheduleQuery = rawQuery;
   const matchingRoutes = findExactStopMatches(rawQuery, appState.selectedCampus);
 
-  if (matchingRoutes.length > 0) {
-    appState.selectedCampus = matchingRoutes[0].campusId;
-  }
-
+  // Header searches target the list, not a previously opened route detail.
+  appState.selectedRouteId = null;
   navigateToPage('routes');
+  if (matchingRoutes.length > 0) {
+    setSelectedCampus(matchingRoutes[0].campusId);
+  }
 
   const routeSearchInput = document.getElementById('route-schedule-search');
   if (routeSearchInput) {
@@ -744,23 +1016,27 @@ function handleHeaderStopSearch() {
   }, 100);
 }
 
-// Validate Places data before entering the shared route-search workflow.
-function hasValidSelectedPlace(place) {
-  return !!place &&
-    Number.isFinite(place.lat) && place.lat >= -90 && place.lat <= 90 &&
-    Number.isFinite(place.lng) && place.lng >= -180 && place.lng <= 180 &&
-    typeof place.formattedAddress === 'string' && place.formattedAddress.trim().length > 0;
-}
-// Location Text Search Handler - only a selected Google place may provide coordinates.
 function handleLocationSearch() {
   const input = document.getElementById('main-location-input');
-  const selectedPlace = appState.selectedPlace;
-  if (!hasValidSelectedPlace(selectedPlace) || !input || input.value.trim() !== selectedPlace.formattedAddress) {
-    showLocationSearchError('Please select a location from the suggestions.');
+  const query = input ? input.value : '';
+  if (appState.selectedStopSuggestion) {
+    applySelectedUetStop(appState.selectedStopSuggestion);
     return;
   }
-
-  runNearbyRouteSearch(selectedPlace.lat, selectedPlace.lng, selectedPlace, 'google');
+  if (!normalizeStopSearchText(query)) {
+    showLocationSearchError('Please select a UET bus stop from the suggestions.');
+    return;
+  }
+  const matches = stopSearchVisibleMatches.length
+    ? stopSearchVisibleMatches
+    : searchUetStops(query, appState.selectedCampus);
+  if (!matches.length) {
+    renderStopSearchDropdown([], query);
+    showLocationSearchError('No matching UET bus stop found.');
+    return;
+  }
+  const selected = matches[Math.max(0, stopSearchActiveIndex)] || matches[0];
+  applySelectedUetStop(selected);
 }
 
 // Quick Chip Select - passes coordinates into pure GPS distance algorithm for selected campus
@@ -778,8 +1054,58 @@ function selectAreaChip(areaName) {
   }
 }
 
+// Count named stops without treating unverified coordinates as physical identity.
+function countUniqueStops(routes) {
+  const names = routes.flatMap(route => route.stops || [])
+    .map(stop => (stop.name || '').trim().toLowerCase().replace(/\s+/g, ' '))
+    .filter(Boolean);
+  return new Set(names).size;
+}
+
+function calculateCampusStats(routes, campuses) {
+  return campuses.map(campus => {
+    const campusRoutes = routes.filter(route => route.campusId === campus.id);
+    return {
+      campusId: campus.id,
+      name: campus.shortName || campus.name,
+      routeCount: campusRoutes.length,
+      uniqueStopCount: countUniqueStops(campusRoutes),
+      arrivalTimes: [...new Set(campusRoutes.map(route => route.arrivalTime?.trim()).filter(Boolean))].sort()
+    };
+  });
+}
+
+function calculateRouteStats(routes, campuses) {
+  return { totalRoutes: routes.length, uniqueStops: countUniqueStops(routes),
+    campuses: calculateCampusStats(routes, campuses) };
+}
+
+function renderHomeStats() {
+  const container = document.getElementById('home-stats');
+  if (!container) return;
+  const stats = calculateRouteStats(UET_DATA.routes, UET_DATA.campuses);
+  const cards = [
+    {icon:'bus', value:stats.totalRoutes, label:'Total Routes'},
+    {icon:'map-pin', value:stats.uniqueStops, label:'Unique Stop Names'}
+  ];
+  stats.campuses.forEach(campus => cards.push({
+    icon:'graduation-cap', value:campus.routeCount, label:`${campus.name} Routes`,
+    detail:campus.arrivalTimes.length ? `Scheduled arrival: ${campus.arrivalTimes.join(' / ')}` : ''
+  }));
+  container.innerHTML = cards.map(card => `
+    <div class="stat-card">
+      <div class="stat-icon"><i class="lucide-${card.icon}"></i></div>
+      <div>
+        <div class="stat-val">${card.value}</div>
+        <div class="stat-lbl">${card.label}</div>
+        ${card.detail ? `<div class="stat-lbl">${card.detail}</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
 // Render Home Page
 function renderHomePage() {
+  renderHomeStats();
   const routesGrid = document.getElementById('home-routes-grid');
   if (!routesGrid) return;
 
@@ -797,7 +1123,7 @@ function renderHomePage() {
       <div class="route-card">
         <div>
           <div class="route-card-header">
-            <span class="route-badge">${route.routeNo}</span>
+            <span class="route-badge">${formatRouteLabel(route.routeNo)}</span>
             <span class="campus-chip">${route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}</span>
           </div>
           <h3 class="route-card-title">${route.name}</h3>
@@ -829,7 +1155,7 @@ function renderHomePage() {
           <button class="btn-card-primary" onclick="viewRouteDetail('${route.id}')">
             <i class="lucide-eye"></i> View Morning Route
           </button>
-          <button class="btn-fav ${isFav ? 'active' : ''}" onclick="toggleFavorite('${route.id}', this)" title="${isFav ? 'Remove from Saved' : 'Save Route'}">
+          <button class="btn-fav ${isFav ? 'active' : ''}" aria-pressed="${isFav}" onclick="toggleFavorite('${route.id}', this)" aria-label="${isFav ? 'Remove from Saved' : 'Save Route'}" title="${isFav ? 'Remove from Saved' : 'Save Route'}">
             <i class="lucide-bookmark"></i>
           </button>
         </div>
@@ -856,6 +1182,7 @@ function renderHomePage() {
 function selectActiveRecommendation(index) {
   appState.activeRecommendationIndex = index;
   renderResultPage();
+  document.querySelector?.('[data-pickup-index="' + index + '"]')?.focus();
 }
 
 // Render Result Page (GPS-based Bus Route Recommendation Result)
@@ -876,10 +1203,10 @@ function renderResultPage() {
           </div>
         </div>
         <div class="campus-toggle-wrapper" style="margin:0; background:var(--bg-surface-subtle); border:1px solid var(--border-light); padding:0.25rem;">
-          <button class="route-campus-btn ${appState.selectedCampus === 'ksk' ? 'active' : ''}" data-campus="ksk" onclick="setSelectedCampus('ksk')" style="padding:0.45rem 1.1rem; font-size:0.85rem;">
+          <button class="route-campus-btn ${appState.selectedCampus === 'ksk' ? 'active' : ''}" data-campus="ksk" aria-pressed="${appState.selectedCampus === 'ksk'}" style="padding:0.45rem 1.1rem; font-size:0.85rem;">
             <i class="lucide-building-2"></i> KSK Campus
           </button>
-          <button class="route-campus-btn ${appState.selectedCampus === 'main' ? 'active' : ''}" data-campus="main" onclick="setSelectedCampus('main')" style="padding:0.45rem 1.1rem; font-size:0.85rem;">
+          <button class="route-campus-btn ${appState.selectedCampus === 'main' ? 'active' : ''}" data-campus="main" aria-pressed="${appState.selectedCampus === 'main'}" style="padding:0.45rem 1.1rem; font-size:0.85rem;">
             <i class="lucide-graduation-cap"></i> Main Campus
           </button>
         </div>
@@ -911,7 +1238,7 @@ function renderResultPage() {
       <div class="info-card no-result-box">
         <div class="no-result-icon"><i class="lucide-search-x"></i></div>
         <h3>No nearby UET bus stop found.</h3>
-        <p>No official UET bus stop was found within 5 km of your location for <strong>${currentCampusName}</strong>.</p>
+        <p>No UET pickup stop in the schedule data was found within ${formatDistance(rec?.maxPickupDistanceKm ?? NEARBY_ROUTE_CONFIG.maxPickupDistanceKm)} of your location for <strong>${currentCampusName}</strong>.</p>
         <div style="margin-top:1.5rem; display:flex; gap:0.75rem; justify-content:center; flex-wrap:wrap;">
           <button class="btn-find-bus" onclick="detectUserGeolocation()">
             <i class="lucide-crosshair"></i> Retry GPS
@@ -932,8 +1259,7 @@ function renderResultPage() {
   const primaryItem = rec.matchingRoutes[activeIdx] || rec.matchingRoutes[0];
   const { route, stop, stopIndex, distanceKm } = primaryItem;
   const isFav = appState.favorites.includes(route.id);
-  const formattedDist = distanceKm < 1 ? `${Math.round(distanceKm * 1000)} meters` : `${distanceKm.toFixed(2)} km`;
-  const estimatedWalk = Math.max(1, Math.round(distanceKm * 12));
+  const formattedDist = formatDistance(distanceKm);
   const userLocationLabel = rec.locationLabel || "Your Location";
   const userLat = rec.userLat;
   const userLng = rec.userLng;
@@ -982,68 +1308,32 @@ function renderResultPage() {
           <span>Nearby Pickup Options (${rec.matchingRoutes.length} Found)</span>
         </div>
         <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1rem;">
-          Pickup stops within 500 meters of your location, sorted from nearest to farthest:
+          ${rec.status === 'nearest' ? 'The nearest pickup stop and options at a similar distance, sorted from nearest to farthest:' : `Pickup stops within ${formatDistance(rec.nearbyRadiusKm ?? NEARBY_ROUTE_CONFIG.nearbyRadiusKm)}, sorted from nearest to farthest:`}
         </p>
         <div style="display:flex; flex-direction:column; gap:0.6rem;">
           ${rec.matchingRoutes.map((item, i) => {
             const isSelected = i === activeIdx;
-            const distStr = item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)}m` : `${item.distanceKm.toFixed(2)} km`;
+            const distStr = formatDistance(item.distanceKm);
             return `
-              <div onclick="selectActiveRecommendation(${i})" style="cursor:pointer; background:${isSelected ? 'var(--bg-surface-highlight)' : 'var(--bg-surface-subtle)'}; border:2px solid ${isSelected ? 'var(--primary-light)' : 'var(--border-light)'}; border-radius:var(--radius-md); padding:0.85rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; transition:var(--transition-fast);">
-                <div style="display:flex; align-items:center; gap:0.75rem;">
-                  <div>
-                    <div style="font-weight:700; color:var(--heading-color); font-size:0.95rem;">${item.stop.name}</div>
-                    <div style="font-size:0.82rem; color:var(--text-muted);">
-                      Route ${item.route.routeNo} &bull; ${item.route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style="font-size:0.82rem; color:var(--text-muted);">
+              <button type="button" class="pickup-option" aria-pressed="${isSelected}" data-pickup-index="${i}" onclick="selectActiveRecommendation(${i})" style="cursor:pointer; background:${isSelected ? 'var(--bg-surface-highlight)' : 'var(--bg-surface-subtle)'}; border:2px solid ${isSelected ? 'var(--primary-light)' : 'var(--border-light)'}; border-radius:var(--radius-md); padding:0.85rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; transition:var(--transition-fast);">
+                <span style="display:flex; align-items:center; gap:0.75rem;">
+                  <span>
+                    <span style="font-weight:700; color:var(--heading-color); font-size:0.95rem;">${item.stop.name}</span>
+                    <span style="font-size:0.82rem; color:var(--text-muted);">
+                      ${formatRouteLabel(item.route.routeNo)} &bull; ${item.route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}
+                    </span>
+                  </span>
+                  <span>
+                    <span style="font-size:0.82rem; color:var(--text-muted);">
                       Pickup time: <strong>${item.stop.time}</strong>
-                    </div>
-                  </div>
-                </div>
-                <div style="display:flex; align-items:center; gap:0.5rem;">
-                  <span class="distance-badge"><i class="lucide-map-pin"></i> ${distStr} away</span>
+                    </span>
+                  </span>
+                </span>
+                <span style="display:flex; align-items:center; gap:0.5rem;">
+                  <span class="distance-badge"><i class="lucide-map-pin"></i> Approx. distance: ${distStr}</span>
                   <span style="font-size:0.8rem; font-weight:600; color:${isSelected ? 'var(--primary-light)' : 'var(--text-muted)'};">${isSelected ? '✓ Recommended' : 'Select'}</span>
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-      </div>
-    `;
-  }
-
-  // Other nearby pickup points within 5 km for this campus.
-  const otherNearby = rec.allNearby
-    .filter(item => !rec.matchingRoutes.some(m => m.route.id === item.route.id && m.stopIndex === item.stopIndex))
-    .slice(0, 4);
-  let otherNearbyHtml = '';
-  if (otherNearby.length > 0) {
-    otherNearbyHtml = `
-      <div class="info-card" style="margin-top:1.25rem;">
-        <div class="info-card-title">
-          <i class="lucide-compass" style="color:var(--primary-light)"></i>
-          <span>Other Nearby ${campusLabel} Routes (Within 5 km)</span>
-        </div>
-        <div style="display:flex; flex-direction:column; gap:0.6rem;">
-          ${otherNearby.map((item) => {
-            const distStr = item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)}m` : `${item.distanceKm.toFixed(2)} km`;
-            return `
-              <div style="background:var(--bg-surface-subtle); border:1px solid var(--border-light); border-radius:var(--radius-md); padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-                <div>
-                  <span class="route-badge" style="font-size:0.78rem; padding:0.2rem 0.5rem;">${item.route.routeNo}</span>
-                  <strong style="margin-left:0.4rem; color:var(--heading-color); font-size:0.9rem;">${item.stop.name}</strong>
-                  <span style="font-size:0.8rem; color:var(--text-muted); margin-left:0.4rem;">(${item.stop.time})</span>
-                </div>
-                <div style="display:flex; align-items:center; gap:0.5rem;">
-                  <span class="distance-badge"><i class="lucide-map-pin"></i> ${distStr}</span>
-                  <button class="btn-card-primary" style="padding:0.3rem 0.6rem; font-size:0.78rem;" onclick="viewRouteDetail('${item.route.id}')">
-                    View
-                  </button>
-                </div>
-              </div>
+                </span>
+              </button>
             `;
           }).join('')}
         </div>
@@ -1054,7 +1344,7 @@ function renderResultPage() {
   // Map markers for Leaflet
   const mapPoints = [
     { lat: userLat, lng: userLng, title: 'Your GPS Location', popup: `<b>Your GPS Location</b><br>${userLocationLabel}` },
-    { lat: stop.lat, lng: stop.lng, title: `Pickup: ${stop.name}`, popup: `<b>${route.routeNo} - ${stop.name}</b><br>Pickup Time: ${stop.time}<br>Distance: ${formattedDist}` },
+    { lat: stop.lat, lng: stop.lng, title: `Pickup: ${stop.name}`, popup: `<b>${formatRouteLabel(route.routeNo)} - ${stop.name}</b><br>Pickup Time: ${stop.time}<br>Approx. distance: ${formattedDist}` },
     { lat: route.stops[route.stops.length - 1].lat, lng: route.stops[route.stops.length - 1].lng, title: 'Campus Destination', popup: `<b>${route.stops[route.stops.length - 1].name}</b>` }
   ];
 
@@ -1073,17 +1363,14 @@ function renderResultPage() {
           </div>
           <h2>${stop.name}</h2>
           <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.3rem; flex-wrap:wrap;">
-            <span class="route-badge" style="font-size:0.95rem;">${route.routeNo}</span>
-            <span class="distance-badge"><i class="lucide-map-pin"></i> ${formattedDist} away</span>
-            <span style="font-size:0.85rem; color:var(--text-muted);"><i class="lucide-footprints"></i> ~${estimatedWalk} mins walk</span>
+            <span class="route-badge" style="font-size:0.95rem;">${formatRouteLabel(route.routeNo)}</span>
+            <span class="distance-badge"><i class="lucide-map-pin"></i> Approx. distance: ${formattedDist}</span>
             <span style="font-size:0.85rem; color:var(--text-muted);"><i class="lucide-clock"></i> Pickup Time: <strong>${stop.time}</strong></span>
             <span class="campus-chip">${campusLabel}</span>
           </div>
         </div>
         <div>
-          <button class="btn-accent" onclick="openGoogleMapsDirections(${stop.lat}, ${stop.lng}, '${encodeURIComponent(stop.name)}')">
-            <i class="lucide-navigation"></i> Directions to Stop
-          </button>
+          ${renderStopNavigation(stop)}
         </div>
       </div>
     </div>
@@ -1097,7 +1384,7 @@ function renderResultPage() {
           <div class="info-card-title">
             <i class="lucide-bus" style="color:var(--primary-light)"></i>
             <span>Complete Route Stops & Morning Schedule</span>
-            <span class="route-badge" style="margin-left:auto;">${route.routeNo}</span>
+            <span class="route-badge" style="margin-left:auto;">${formatRouteLabel(route.routeNo)}</span>
           </div>
           <div style="font-size:1.1rem; font-weight:700; color:var(--heading-color); margin-bottom:0.4rem;">
             ${route.name}
@@ -1114,7 +1401,7 @@ function renderResultPage() {
           </div>
         </div>
 
-        ${otherNearbyHtml}
+
       </div>
 
       <div>
@@ -1141,7 +1428,7 @@ function renderResultPage() {
               <strong>${stop.name} (${stop.time})</strong>
             </div>
             <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
-              <span style="color:var(--text-muted);">Distance from GPS:</span>
+              <span style="color:var(--text-muted);">Approx. distance:</span>
               <strong style="color:var(--success);">${formattedDist}</strong>
             </div>
             <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem;">
@@ -1158,7 +1445,7 @@ function renderResultPage() {
             <button class="btn-secondary" style="width:100%; justify-content:center;" onclick="printRouteSchedule('${route.id}')">
               <i class="lucide-printer"></i> Print / Download Route PDF
             </button>
-            <button class="btn-secondary ${isFav ? 'active' : ''}" style="width:100%; justify-content:center;" onclick="toggleFavorite('${route.id}', this)">
+            <button class="btn-secondary ${isFav ? 'active' : ''}" style="width:100%; justify-content:center;" aria-pressed="${isFav}" onclick="toggleFavorite('${route.id}', this)">
               <i class="lucide-bookmark"></i> ${isFav ? 'Remove from Saved' : 'Save to Favorites'}
             </button>
           </div>
@@ -1188,7 +1475,7 @@ function renderRouteSummaryCard(route) {
     <article class="route-card" id="route-card-${route.id}">
       <div>
         <div class="route-card-header">
-          <span class="route-badge">Route ${route.routeNo}</span>
+          <span class="route-badge">${formatRouteLabel(route.routeNo)}</span>
           <span class="campus-chip">${route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}</span>
         </div>
         <h3 class="route-card-title">${route.name}</h3>
@@ -1221,7 +1508,7 @@ function renderRouteDetailView(route) {
     </button>
     <div class="route-detail-heading">
       <div>
-        <h2>Route ${route.routeNo} - Full Details</h2>
+        <h2>${formatRouteLabel(route.routeNo)} - Full Details</h2>
         <p>${route.name}</p>
       </div>
       <span class="campus-chip">${campusLabel}</span>
@@ -1265,7 +1552,7 @@ function renderRouteDetailView(route) {
         </div>
         <div class="route-detail-actions">
           <button class="btn-secondary" onclick="printRouteSchedule('${route.id}')"><i class="lucide-printer"></i> Print / Download</button>
-          <button class="btn-secondary ${isFav ? 'active' : ''}" onclick="toggleFavorite('${route.id}', this)"><i class="lucide-bookmark"></i> ${isFav ? 'Saved' : 'Save Route'}</button>
+          <button class="btn-secondary ${isFav ? 'active' : ''}" aria-pressed="${isFav}" onclick="toggleFavorite('${route.id}', this)"><i class="lucide-bookmark"></i> ${isFav ? 'Saved' : 'Save Route'}</button>
         </div>
       </div>
     </div>
@@ -1277,9 +1564,15 @@ function renderRoutesPage() {
   const container = document.getElementById('routes-detail-container');
   if (!container) return;
 
+  const listControls = document.getElementById('route-schedule-controls');
+  const searchInput = document.getElementById('route-schedule-search');
+  if (searchInput) searchInput.value = appState.routeScheduleQuery;
+  if (listControls) listControls.hidden = false;
+
   if (appState.selectedRouteId) {
     const selectedRoute = UET_DATA.routes.find(route => route.id === appState.selectedRouteId);
     if (selectedRoute) {
+      if (listControls) listControls.hidden = true;
       container.innerHTML = renderRouteDetailView(selectedRoute);
       refreshLucideIcons();
       return;
@@ -1293,20 +1586,20 @@ function renderRoutesPage() {
   );
   const displayRoutes = routeSearchQuery
     ? campusFilteredRoutes.filter(route =>
-      route.stops.some(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery))
+      route.stops.some(stop => stopMatchesSearch(stop, routeSearchQuery))
     )
     : campusFilteredRoutes;
   let html = `
     <div class="route-schedules-heading">
       <div>
-        <h2>Official UET Bus Routes (${appState.selectedCampus === 'ksk' ? 'KSK New Campus' : 'Main Campus - 22 Morning Routes'})</h2>
-        <p>Morning Arrival Schedules extracted from official Transport Office PDF</p>
+        <h2>UET Route Schedules (${appState.selectedCampus === 'ksk' ? 'KSK New Campus' : 'Main Campus - 22 Morning Routes'})</h2>
+        <p>Based on Official Transport Schedule Data</p>
       </div>
     </div>
     <div class="info-card route-campus-filter">
       <div class="campus-toggle-wrapper" style="justify-content:flex-start; margin:0;">
-        <button class="route-campus-btn ${appState.selectedCampus === 'main' ? 'active' : ''}" data-campus="main"><i class="lucide-graduation-cap"></i> Main Campus</button>
-        <button class="route-campus-btn ${appState.selectedCampus === 'ksk' ? 'active' : ''}" data-campus="ksk"><i class="lucide-building-2"></i> KSK Campus</button>
+        <button class="route-campus-btn ${appState.selectedCampus === 'main' ? 'active' : ''}" data-campus="main" aria-pressed="${appState.selectedCampus === 'main'}"><i class="lucide-graduation-cap"></i> Main Campus</button>
+        <button class="route-campus-btn ${appState.selectedCampus === 'ksk' ? 'active' : ''}" data-campus="ksk" aria-pressed="${appState.selectedCampus === 'ksk'}"><i class="lucide-building-2"></i> KSK Campus</button>
       </div>
     </div>
   `;
@@ -1343,25 +1636,31 @@ function initLeafletMap(containerId, centerCoords, zoomLevel, points) {
   });
 }
 
-// View one route without rendering the other route details.
+// Every detail opened from a card has a route-list history entry behind it.
 function viewRouteDetail(routeId) {
-  const route = UET_DATA.routes.find(r => r.id === routeId);
+  const route = UET_DATA.routes.find(item => item.id === routeId);
   if (!route) return;
-
+  if (appState.activePage !== 'routes' || appState.selectedRouteId) {
+    navigateToPage('routes', { resetScroll: false });
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  appState.routeListState = {
+    campus: appState.selectedCampus, query: appState.routeScheduleQuery, scrollY: window.scrollY
+  };
   appState.routeListScrollY = window.scrollY;
-  appState.selectedRouteId = routeId;
-  navigateToPage('routes');
-  renderRoutesPage();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  navigateToPage('routes', { routeId, resetScroll: false, fromRouteList: true });
+  window.scrollTo({ top: 0, behavior: 'instant' });
+  saveNavigationEntry(true, true, 0);
 }
 
 function returnToRouteList() {
-  appState.selectedRouteId = null;
-  renderRoutesPage();
+  if (window.history?.state?.uetNavigation && window.history.state.fromRouteList) {
+    window.history.back();
+    return;
+  }
+  // Directly loaded detail URLs have no guaranteed in-site Back entry.
   navigateToPage('routes');
-  setTimeout(() => window.scrollTo({ top: appState.routeListScrollY, behavior: 'smooth' }), 0);
 }
-
 // Toggle Save / Favorite Route
 function toggleFavorite(routeId, btnEl) {
   const idx = appState.favorites.indexOf(routeId);
@@ -1376,6 +1675,7 @@ function toggleFavorite(routeId, btnEl) {
 
   if (btnEl) {
     btnEl.classList.toggle('active');
+    btnEl.setAttribute('aria-pressed', String(appState.favorites.includes(routeId)));
   }
 
   renderHomePage();
@@ -1390,12 +1690,14 @@ function promptRemoveFavorite(routeId) {
   const modal = document.getElementById('delete-confirm-modal');
   if (modal) {
     modal.classList.add('active');
+    openAccessibleLayer(modal, modal.querySelector('button'));
     refreshLucideIcons();
   }
 }
 
 // Close Delete Confirmation Popup
 function closeDeleteModal() {
+  if (activeAccessibleLayer?.root.id === 'delete-confirm-modal') closeAccessibleLayer();
   pendingDeleteRouteId = null;
   const modal = document.getElementById('delete-confirm-modal');
   if (modal) {
@@ -1456,7 +1758,7 @@ function renderFavoritesPage() {
       <div class="route-card">
         <div>
           <div class="route-card-header">
-            <span class="route-badge">${route.routeNo}</span>
+            <span class="route-badge">${formatRouteLabel(route.routeNo)}</span>
             <span class="campus-chip">${route.campusId === 'ksk' ? 'KSK' : 'Main'}</span>
           </div>
           <h3 class="route-card-title">${route.name}</h3>
@@ -1466,7 +1768,7 @@ function renderFavoritesPage() {
         </div>
         <div class="route-card-actions">
           <button class="btn-card-primary" onclick="viewRouteDetail('${route.id}')">View Route</button>
-          <button class="btn-fav active" onclick="promptRemoveFavorite('${route.id}')" title="Delete from Saved">
+          <button class="btn-fav active" onclick="promptRemoveFavorite('${route.id}')" aria-label="Delete from Saved" title="Delete from Saved">
             <i class="lucide-trash-2"></i>
           </button>
         </div>
@@ -1485,11 +1787,11 @@ function renderFaqs() {
 
   container.innerHTML = UET_DATA.faqs.map((faq, i) => `
     <div class="faq-item">
-      <div class="faq-header" onclick="toggleFaq(${i})">
+      <h4 class="faq-heading"><button type="button" class="faq-header" id="faq-control-${i}" aria-controls="faq-body-${i}" aria-expanded="false" onclick="toggleFaq(${i})">
         <span>${faq.q}</span>
-        <i class="lucide-chevron-down faq-icon-${i}"></i>
-      </div>
-      <div class="faq-body" id="faq-body-${i}">
+        <i class="lucide-chevron-down faq-icon-${i}" aria-hidden="true"></i>
+      </button></h4>
+      <div class="faq-body" id="faq-body-${i}" role="region" aria-labelledby="faq-control-${i}" hidden>
         ${faq.a}
       </div>
     </div>
@@ -1500,16 +1802,34 @@ function renderFaqs() {
 function toggleFaq(index) {
   const item = document.querySelectorAll('.faq-item')[index];
   if (item) {
-    item.classList.toggle('active');
+    const expanded = item.classList.toggle('active');
+    document.getElementById('faq-control-' + index).setAttribute('aria-expanded', String(expanded));
+    document.getElementById('faq-body-' + index).hidden = !expanded;
   }
 }
 
-// Google Maps Navigation Trigger
-function openGoogleMapsDirections(lat, lng, label) {
-  const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=${label}`;
-  window.open(url, '_blank');
+// Google Maps URLs work in desktop browsers and the mobile Maps app.
+// Never use a stop name as a Place ID. coordinateStatus is informational only.
+function getStopNavigationUrl(stop) {
+  if (!stop || !Number.isFinite(stop.lat) || stop.lat < -90 || stop.lat > 90 ||
+      !Number.isFinite(stop.lng) || stop.lng < -180 || stop.lng > 180) return null;
+
+  let url = `https://www.google.com/maps/dir/?api=1&destination=${stop.lat},${stop.lng}`;
+  // Future explicit opt-in after the Google Place ID itself is verified.
+  // A verified coordinateStatus alone does not verify an associated Place ID.
+  if (stop.placeIdVerified === true && typeof stop.placeId === 'string' && stop.placeId.trim()) {
+    url += `&destination_place_id=${encodeURIComponent(stop.placeId.trim())}`;
+  }
+  return url;
 }
 
+function renderStopNavigation(stop) {
+  const url = getStopNavigationUrl(stop);
+  if (!url) return '<span class="navigation-unavailable" role="status">Navigation location not available</span>';
+  return `<a class="btn-accent" href="${url.replace(/&/g, '&amp;')}" target="_blank" rel="noopener noreferrer">
+    <i class="lucide-navigation"></i> Directions to Stop
+  </a>`;
+}
 // Route Print / PDF Trigger
 function printRouteSchedule(routeId) {
   const route = UET_DATA.routes.find(r => r.id === routeId);
@@ -1522,8 +1842,8 @@ function printRouteSchedule(routeId) {
     <div id="printable-area" style="padding:1rem;">
       <div style="border-bottom:2px solid var(--border-light); padding-bottom:0.75rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center;">
         <div>
-          <h2 style="color:var(--heading-color); font-size:1.5rem;">UET BUS ${route.routeNo.toUpperCase()}</h2>
-          <p style="color:var(--text-muted); font-size:0.85rem;">Official Transport Morning Schedule - ${route.name}</p>
+          <h2 id="print-dialog-title" tabindex="-1" style="color:var(--heading-color); font-size:1.5rem;">UET Bus Route Info — ${formatRouteLabel(route.routeNo)}</h2>
+          <p style="color:var(--text-muted); font-size:0.85rem;">Based on Official Transport Schedule Data — ${route.name}</p>
         </div>
         <span class="route-badge" style="font-size:1.1rem; padding:0.5rem 1rem;">${route.campusId === 'ksk' ? 'KSK CAMPUS' : 'MAIN CAMPUS'}</span>
       </div>
@@ -1557,7 +1877,7 @@ function printRouteSchedule(routeId) {
       </div>
 
       <div style="font-size:0.75rem; color:var(--text-muted); text-align:center; border-top:1px dashed var(--border-light); padding-top:0.75rem;">
-        Issued by Chairman Transport Committee UET | Contact: Mr. M. Mushtaq 0304-0165776
+        Prepared using UET Bus Route Info for the UET community.<br>Source: Official Transport Routes<br>Transport contact: Chairman Transport Committee UET — Mr. M. Mushtaq 0304-0165776
       </div>
     </div>
 
@@ -1568,20 +1888,62 @@ function printRouteSchedule(routeId) {
   `;
 
   modal.classList.add('active');
+  openAccessibleLayer(modal, document.getElementById('print-dialog-title'));
   refreshLucideIcons();
 }
 
 function closeModal() {
+  closeAccessibleLayer();
   pendingDeleteRouteId = null;
   document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
 }
 
-// Route URL Hashes
-function handleUrlRouting() {
-  const hash = window.location.hash.replace('#', '');
-  const normalizedHash = hash === 'stops' ? 'routes' : hash;
-  if (normalizedHash && ['home', 'result', 'routes', 'favorites', 'notices', 'contact'].includes(normalizedHash)) {
-    if (normalizedHash === 'favorites') renderFavoritesPage();
-    navigateToPage(normalizedHash);
+// Hash URLs keep direct links compatible with static GitHub Pages hosting.
+function parseNavigationHash(hash) {
+  const raw = (hash || '').replace(/^#/, '');
+  const parts = raw.split('/');
+  if (parts[0] === 'routes' || parts[0] === 'stops') {
+    let routeId = null;
+    try {
+      if (parts.length === 2) routeId = decodeURIComponent(parts[1]);
+    } catch (_) { /* Malformed URL safely becomes the route list. */ }
+    const route = UET_DATA.routes.find(item => item.id === routeId);
+    return { page: 'routes', routeId: route?.id || null,
+      hash: route ? `#routes/${encodeURIComponent(route.id)}` : '#routes' };
   }
+  const page = ['home','result','favorites','notices','contact'].includes(raw) ? raw : 'home';
+  return {page, routeId:null, hash:`#${page}`};
 }
+
+function saveNavigationEntry(replace = false, fromRouteList, scrollY = window.scrollY || 0) {
+  if (!window.history || !window.location) return;
+  const hash = appState.activePage === 'routes' && appState.selectedRouteId
+    ? `#routes/${encodeURIComponent(appState.selectedRouteId)}` : `#${appState.activePage}`;
+  const sameEntry = window.location.hash === hash;
+  const state = {
+    uetNavigation: true, hash, campus: appState.selectedCampus,
+    query: appState.routeScheduleQuery, scrollY,
+    routeListState: appState.routeListState,
+    fromRouteList: fromRouteList ?? (sameEntry && window.history.state?.fromRouteList) ?? false
+  };
+  window.history[replace || sameEntry ? 'replaceState' : 'pushState'](state, '', hash);
+}
+
+function handleUrlRouting() {
+  const target = parseNavigationHash(window.location.hash);
+  const saved = window.history.state?.hash === target.hash ? window.history.state : null;
+  const route = UET_DATA.routes.find(item => item.id === target.routeId);
+  const campus = route?.campusId || saved?.campus || appState.selectedCampus;
+  appState.selectedRouteId = null;
+  appState.routeScheduleQuery = saved?.query || '';
+  setSelectedCampus(campus, { updateHistory: false });
+  appState.routeListState = saved?.routeListState || null;
+  appState.routeListScrollY = saved?.scrollY || 0;
+  navigateToPage(target.page, { routeId: target.routeId, updateHistory: false, resetScroll: false });
+  window.history.scrollRestoration = 'manual';
+  saveNavigationEntry(true, saved?.fromRouteList || false, saved?.scrollY || 0);
+  setTimeout(() => window.scrollTo({top:saved?.scrollY || 0, behavior:'instant'}), 0);
+}
+
+window.addEventListener?.('popstate', handleUrlRouting);
+window.addEventListener?.('hashchange', handleUrlRouting);

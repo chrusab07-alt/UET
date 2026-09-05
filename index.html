@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>UET Bus Route Info - Find Your Campus Bus</title>
-  <meta name="description" content="Official UET Lahore bus route finder for Main Campus & KSK New Campus. Find stops, bus numbers, driver contact details, and pickup timings easily.">
+  <meta name="description" content="UET Bus Route Info for the UET community, based on official transport schedule data for Main Campus and KSK. Find stops, route timings, and transport contact details.">
 
   <!-- Google Fonts: Inter & Outfit -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -51,7 +51,7 @@
         </div>
       </a>
 
-      <button class="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false">
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="mobile-menu-drawer">
         <i class="lucide-menu"></i>
       </button>
 
@@ -96,7 +96,7 @@
 
   <div class="mobile-menu-overlay" id="mobile-menu-overlay" aria-hidden="true"></div>
 
-  <aside class="mobile-menu-drawer" id="mobile-menu-drawer" aria-label="Mobile navigation">
+  <aside class="mobile-menu-drawer" id="mobile-menu-drawer" role="dialog" aria-modal="true" aria-label="Mobile navigation" aria-hidden="true" tabindex="-1" inert>
     <div class="mobile-menu-header">
       <div class="mobile-menu-brand">Menu</div>
       <button class="mobile-menu-close" type="button" aria-label="Close navigation menu">
@@ -152,10 +152,10 @@
 
           <!-- Campus Toggle Selector -->
           <div class="campus-toggle-wrapper">
-            <button class="campus-btn active" data-campus="ksk">
+            <button class="campus-btn active" data-campus="ksk" aria-pressed="true">
               <i class="lucide-building-2"></i> KSK / New Campus
             </button>
-            <button class="campus-btn" data-campus="main">
+            <button class="campus-btn" data-campus="main" aria-pressed="false">
               <i class="lucide-graduation-cap"></i> Main Campus (GT Road)
             </button>
           </div>
@@ -163,9 +163,10 @@
           <!-- Location Search Card -->
           <div class="search-hero-box">
             <div class="search-input-group">
-              <div class="search-field-wrapper">
+              <div class="search-field-wrapper location-search-field">
                 <i class="lucide-map-pin"></i>
-                <input type="text" id="main-location-input" class="search-input" placeholder="Enter your area, street, or landmark (e.g. Wapda Town, Johar Town, Defense, Taj Bagh)...">
+                <input type="text" id="main-location-input" class="search-input" role="combobox" aria-autocomplete="list" aria-controls="stop-search-suggestions" aria-expanded="false" aria-label="Search a UET bus stop" aria-describedby="stop-search-status" autocomplete="off" placeholder="Search a UET bus stop (e.g. MAO College, Johar Town...)">
+                <ul id="stop-search-suggestions" class="stop-search-dropdown" role="listbox" aria-label="UET bus stop suggestions" hidden></ul>
               </div>
               <button class="btn-locate" id="btn-locate-me">
                 <i class="lucide-crosshair"></i> Detect My Area
@@ -174,6 +175,8 @@
                 <i class="lucide-search"></i> Find Bus Route
               </button>
             </div>
+
+            <p id="stop-search-status" class="places-status" role="status" aria-live="polite">Search a UET bus stop by name.</p>
 
             <!-- Popular Area Chips Container -->
             <div id="area-chips-wrapper" class="quick-chips-container">
@@ -184,36 +187,7 @@
       </div>
 
       <!-- Quick Stats Ribbon -->
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-icon"><i class="lucide-bus"></i></div>
-          <div>
-            <div class="stat-val">19+</div>
-            <div class="stat-lbl">Active Bus Routes</div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon"><i class="lucide-map-pin"></i></div>
-          <div>
-            <div class="stat-val">120+</div>
-            <div class="stat-lbl">Covered Bus Stops</div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon"><i class="lucide-users"></i></div>
-          <div>
-            <div class="stat-val">15,000+</div>
-            <div class="stat-lbl">Daily Student Commuters</div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon"><i class="lucide-clock"></i></div>
-          <div>
-            <div class="stat-val">07:50 AM</div>
-            <div class="stat-lbl">On-Time Campus Arrival</div>
-          </div>
-        </div>
-      </div>
+      <div id="home-stats" class="stats-grid"></div>
 
       <!-- Route Cards Section -->
       <div class="section-header">
@@ -244,8 +218,8 @@
 
     <!-- PAGE 3: ROUTE DETAILS PAGE -->
     <section id="page-routes" class="page-section">
-      <div class="info-card" style="margin-bottom:1.25rem;">
-        <div class="search-field-wrapper" style="margin:0;">
+      <div id="route-schedule-controls" class="info-card" style="margin-bottom:1.25rem;">
+        <div class="search-field-wrapper location-search-field" style="margin:0;">
           <i class="lucide-search"></i>
           <input
             type="text"
@@ -361,7 +335,7 @@
   </main>
 
   <!-- Universal Print / Download Modal -->
-  <div id="print-modal" class="modal-overlay">
+  <div id="print-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="print-dialog-title" aria-hidden="true" tabindex="-1">
     <div class="modal-content">
       <button class="modal-close" aria-label="Close modal"><i class="lucide-x"></i></button>
       <div id="print-modal-body">
@@ -371,13 +345,13 @@
   </div>
 
   <!-- Delete Confirmation Modal for Saved Routes -->
-  <div id="delete-confirm-modal" class="modal-overlay">
+  <div id="delete-confirm-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-description" aria-hidden="true" tabindex="-1">
     <div class="modal-content" style="max-width: 440px; text-align: center; padding: 2rem 1.5rem;">
       <div style="width: 52px; height: 52px; background: var(--danger-soft); color: var(--danger); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.25rem; font-size: 1.5rem;">
         <i class="lucide-trash-2"></i>
       </div>
-      <h3 style="margin-bottom: 0.5rem; font-size: 1.2rem; color: var(--heading-color);">Remove Saved Route</h3>
-      <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.5rem; line-height: 1.5;">
+      <h3 id="delete-dialog-title" style="margin-bottom: 0.5rem; font-size: 1.2rem; color: var(--heading-color);">Remove Saved Route</h3>
+      <p id="delete-dialog-description" style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.5rem; line-height: 1.5;">
         Are you sure you want to delete this route from your saved routes?
       </p>
       <div style="display: flex; gap: 0.75rem; justify-content: center;">
@@ -430,6 +404,7 @@
       <div class="footer-center">
         <p class="footer-credit">Prepared by Muhammad Rusab Chaudhary (Electrical Engineering Student)</p>
         <p class="footer-source">Source: Official Transport Routes</p>
+        <p class="footer-source">Community information website; not an official UET-operated portal.</p>
       </div>
 
       <!-- Right: Rights -->
@@ -442,85 +417,10 @@
   <script>document.getElementById('footer-year').textContent = new Date().getFullYear();</script>
 
   <!-- App Data and Scripts -->
+  <script src="js/config.js"></script>
   <script src="js/data.js"></script>
   <script src="js/app.js"></script>
-  <script>
-    // Animated stat counters (runs once when stats become visible)
-    (function(){
-      function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
 
-      function formatWithSeparators(n){
-        return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-      }
-
-      function animateNumber(el, from, to, duration, suffix){
-        var start = null;
-        var diff = to - from;
-        function step(timestamp){
-          if (!start) start = timestamp;
-          var progress = Math.min((timestamp - start) / duration, 1);
-          var eased = easeOutCubic(progress);
-          var current = Math.round(from + diff * eased);
-          el.textContent = formatWithSeparators(current) + (suffix||"");
-          if (progress < 1) requestAnimationFrame(step);
-          else el.dataset.animated = 'true';
-        }
-        requestAnimationFrame(step);
-      }
-
-      function animateTime(el, timeText, duration){
-        var parts = timeText.trim().split(/\s+/);
-        var hhmm = parts[0];
-        var ampm = parts[1] ? (' ' + parts[1]) : '';
-        var pieces = hhmm.split(':');
-        var targetH = parseInt(pieces[0], 10) || 0;
-        var targetM = parseInt(pieces[1], 10) || 0;
-        var start = null;
-        function step(ts){
-          if (!start) start = ts;
-          var progress = Math.min((ts - start) / duration, 1);
-          var eased = easeOutCubic(progress);
-          var curH = Math.floor(targetH * eased);
-          var curM = Math.floor(targetM * eased);
-          curH = Math.min(curH, targetH);
-          curM = Math.min(curM, targetM);
-          var hh = String(curH).padStart(2, '0');
-          var mm = String(curM).padStart(2, '0');
-          el.textContent = hh + ':' + mm + ampm;
-          if (progress < 1) requestAnimationFrame(step);
-          else el.dataset.animated = 'true';
-        }
-        requestAnimationFrame(step);
-      }
-
-      document.addEventListener('DOMContentLoaded', function(){
-        var statsSection = document.querySelector('.stats-grid');
-        if (!statsSection) return;
-        var observer = new IntersectionObserver(function(entries, obs){
-          entries.forEach(function(entry){
-            if (entry.isIntersecting){
-              var vals = statsSection.querySelectorAll('.stat-val');
-              vals.forEach(function(el){
-                if (el.dataset.animated === 'true') return;
-                var raw = el.textContent.trim();
-                if (/\d+:\d+/.test(raw)){
-                  animateTime(el, raw, 1700);
-                  return;
-                }
-                var hasPlus = /\+$/.test(raw);
-                var numeric = raw.replace(/[^0-9]/g, '');
-                if (numeric === '') return;
-                var target = parseInt(numeric, 10) || 0;
-                animateNumber(el, 0, target, 1700, hasPlus ? '+' : '');
-              });
-              obs.unobserve(statsSection);
-            }
-          });
-        }, {threshold: 0.4});
-        observer.observe(statsSection);
-      });
-    })();
-  </script>
   <script>
     // Force the Lucide CDN script to render icons from the existing class naming
     document.addEventListener('DOMContentLoaded', function(){
