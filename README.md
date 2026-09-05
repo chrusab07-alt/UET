@@ -1,35 +1,13 @@
-# UET Bus Route Finder
+# UET Bus Route Info
 
-## Google Places and GitHub Pages deployment
+## Search and deployment
 
-The location box uses Google's supported `PlaceAutocompleteElement` via `importLibrary('places')`, not legacy `Autocomplete`. Results are restricted to Pakistan and softly biased within 50 km of Lahore (31.5204, 74.3587). No place-type filter excludes roads, markets, universities, colleges, landmarks, or housing societies. Popular area chips remain optional shortcuts, separate from Google suggestions.
+Homepage autocomplete uses the local UET stop dataset. GPS uses browser geolocation; Google Maps directions remain ordinary coordinate-based links. No Google API key or loader is needed. Route Schedules searches numbers, labels, names, start areas, campuses, stops, and aliases through one normalization helper, including Govt./Government spelling equivalence. Official display names are unchanged.
 
-Selecting a suggestion calls `placePrediction.toPlace()` and `fetchFields` for `displayName`, `formattedAddress`, `location`, and `id`. Only validated selected-place coordinates enter the existing shared route finder. Editing the field invalidates its selection and pending detail requests. Raw text is never geocoded or matched to routes. GPS and campus/distance matching retain their existing behavior.
+Select GitHub Actions in Settings → Pages and run the Deploy GitHub Pages workflow. For local builds, run `node scripts/build-pages.cjs` and serve `_site` over HTTP. The build preserves an existing CNAME.
 
-### Required outside this repository
+Run `node --test tests/*.test.cjs`, `node tests/places-browser.cjs` (current local-search/GPS browser regression), and `node tests/responsive-accessibility.cjs` with Playwright available. Set CHROMIUM_PATH if needed.
 
-1. Create a Google Cloud project, link an active billing account, and enable **Maps JavaScript API** and **Places API (New)**. The legacy Places API and Geocoding API are not required.
-2. Create a browser API key. Set **Application restrictions → Websites (HTTP referrers)** to `https://rusabch07.github.io/*`. If using a custom domain, add its exact HTTPS hostname and `/*` (and the `www` hostname only if used). Do not allow all `*.github.io` sites. Avoid restricting only to `/UET/*`: browsers can strip paths from cross-origin referrers.
-3. Set **API restrictions → Restrict key** to **Maps JavaScript API** and **Places API (New)**. Configure suitable quotas/budget alerts in Google Cloud.
-4. In GitHub repository **Settings → Secrets and variables → Actions**, add a repository secret named **GOOGLE_MAPS_BROWSER_KEY** containing that restricted key.
-5. In **Settings → Pages → Build and deployment**, select **GitHub Actions**. Push these changes to `main`, or run **Deploy GitHub Pages** from Actions after the workflow is available. The workflow runs regression tests, creates `_site`, injects `js/config.js` only into the deployed artifact, and deploys it. A missing key fails the build instead of replacing production with an unconfigured search.
-6. Open the deployment URL reported by the workflow (expected default: `https://rusabch07.github.io/UET/`). Test real suggestions and selection on desktop and mobile. A custom domain also needs GitHub Pages domain/DNS configuration; an existing `CNAME` file is preserved by the build.
-
-The committed `js/config.js` intentionally contains no key. Browser keys are visible in downloaded JavaScript even when supplied as GitHub secrets; HTTP-referrer and API restrictions are essential. Never commit an unrestricted key. This repository cannot enable billing, create credentials, or change account settings for you.
-
-### Local or branch-based hosting
-
-Use an HTTP development server rather than opening `index.html` through `file://`. To build locally, supply a separately restricted development key as the `GOOGLE_MAPS_BROWSER_KEY` environment variable and run `node scripts/build-pages.cjs`, then serve `_site`. Allow only the actual development origin (for example `http://localhost:8080/*`) on the development key. For branch-based Pages instead of Actions, `js/config.js` must be populated with a restricted browser key; the Actions approach avoids committing it.
-
-### Failure behavior and verification
-
-Without a key, the page states that Google search is not configured and points to Detect My Area. Script/network failure, timeout, authorization failure, prediction failure, and unavailable place details have explicit messages. No error path fabricates a selected location.
-
-Run `node --test tests/nearby-routes.test.cjs` for GPS/Places parity across both campuses, input validation, and async selection tests. `node tests/places-browser.cjs` runs Chromium desktop/mobile smoke tests when Playwright and a Chromium browser are installed (set `CHROMIUM_PATH` if needed). Its Places responses are mocked: it tests application wiring and responsive layout, not Google's live suggestions or key authorization.
-
-Live acceptance after configuration: type Johar Town, a road, a university, and a landmark; confirm Google suggestions; select one and confirm pickup results; edit the input and confirm Find Bus Route rejects it until reselection; compare GPS and Places at the same coordinates for Main and KSK; repeat at a phone viewport in light and dark themes. If unavailable, check browser console for `RefererNotAllowedMapError`, `ApiNotActivatedMapError`, billing, or quota errors and correct Cloud settings.
-
-References: [Google autocomplete widget](https://developers.google.com/maps/documentation/javascript/place-autocomplete-new), [widget properties and events](https://developers.google.com/maps/documentation/javascript/reference/places-widget), [Google key security](https://developers.google.com/maps/api-security-best-practices), [GitHub Pages workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 ## Stop coordinate metadata and audit
 
 Every route stop now explicitly includes `coordinateStatus`, `placeId`, `source`, and `aliases`. Existing coordinates have not been independently verified, so all are marked `unverified`; `placeId` and `source` are `null`, and `aliases` contain curated spelling variants where available. No coordinates, route IDs/names, timings, or campus assignments were changed.
@@ -71,3 +49,13 @@ Aliases are now intentionally functional for text search. Verification status, P
 ## Client-side navigation
 
 Route lists use `#routes`; individual routes use `#routes/<route-id>` (for example `#routes/main-19`). Internal navigation uses browser history without reloading the document. Browser Back/Forward restores each entry's campus, search query, and saved list scroll position. Opening details from a card creates a route-list entry first when needed; the on-page Back button uses that entry. Direct detail URLs restore the route's own campus on load/refresh, and unknown or malformed route IDs are replaced with `#routes`. No GitHub Pages server rewrite is required.
+## Responsive layout and keyboard checks
+
+Targeted rules in `css/styles.css` align `.search-input-group` controls at 1024 px and below, stabilize `.header-container` / `.header-actions`, stack `.campus-toggle-wrapper` on phones, and keep `.stats-grid` in two columns on normal phone widths. `.search-field-wrapper` positions both original icon elements and Lucide-generated SVGs so icons cannot shrink the input. Both search-result and full-route `.stops-timeline` views use a dedicated marker column with connected half-lines that stop at the first and last marker centers. Existing theme color variables and route data are unchanged.
+
+`index.html` groups the theme and menu buttons and provides dialog semantics. `js/app.js` adds keyboard-operable FAQ/pickup buttons, selected-state attributes, modal/drawer focus containment, Escape dismissal, and focus restoration. Full-route focus moves to its Back button after the section becomes visible.
+
+Run `node tests/responsive-accessibility.cjs` with Playwright available and `CHROMIUM_PATH` pointing to Chrome if needed. Set `TEST_EXTERNAL_ASSETS=1` to include the deployed fonts and icons. The script checks 360x800, 390x844, 412x915, 768x1024, 820x1180, 1024x768, and 1366x768 in both themes, and saves screenshots under ignored `test-results/`. Checks include actual input/button geometry, campus dimensions, stats rows, timeline axes, full-route isolation, FAQ keyboard activation, print-dialog focus trapping/restoration, drawer dismissal, and document overflow.
+
+
+Timeline regression coverage also renders the Flat Stop search result, including origin, nearest-pickup, intermediate and destination markers. Each dot is checked against the line center at every target size/theme, including hover; marker diameter, continuous row connections and first/last line endpoints are checked. The centered CSS is shared by both timeline views.

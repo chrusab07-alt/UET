@@ -34,8 +34,6 @@
       }
     })();
 
-    window.UET_CONFIG = window.UET_CONFIG || {};
-    window.UET_CONFIG.googleMapsApiKey = window.UET_CONFIG.googleMapsApiKey || '';
   </script>
 </head>
 <body>
@@ -51,9 +49,7 @@
         </div>
       </a>
 
-      <button class="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="mobile-menu-drawer">
-        <i class="lucide-menu"></i>
-      </button>
+
 
       <ul class="nav-links">
         <li>
@@ -90,6 +86,9 @@
           <i class="lucide-moon theme-icon-moon"></i>
           <i class="lucide-sun theme-icon-sun"></i>
         </button>
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="mobile-menu-drawer">
+        <i class="lucide-menu"></i>
+      </button>
       </div>
     </div>
   </header>
@@ -416,7 +415,6 @@
   <script>document.getElementById('footer-year').textContent = new Date().getFullYear();</script>
 
   <!-- App Data and Scripts -->
-  <script src="js/config.js"></script>
   <script src="js/data.js"></script>
   <script src="js/app.js"></script>
 

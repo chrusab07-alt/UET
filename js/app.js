@@ -3,7 +3,6 @@
 let appState = {
   selectedCampus: 'ksk', // 'ksk' or 'main'
   currentLocation: null, // { lat, lng, name, formattedAddress, placeId, source }
-  selectedPlace: null,
   selectedStopSuggestion: null,
   highlightedStop: null,
   recommendationResults: null, // { status: 'within_radius' | 'nearest' | 'none', matchingRoutes, allNearby, userLat, userLng, locationLabel, targetCampus }
@@ -35,9 +34,6 @@ function formatRouteLabel(routeNo) {
 function formatDistance(distanceKm) {
   if (!Number.isFinite(distanceKm) || distanceKm < 0) return 'Unavailable';
   return distanceKm < 1 ? `${Math.round(distanceKm * 1000)} m` : `${distanceKm.toFixed(2)} km`;
-}
-function getGoogleMapsApiKey() {
-  return (window.UET_CONFIG && window.UET_CONFIG.googleMapsApiKey) || '';
 }
 
 // Theme Management (Professional Light / Dark Mode with Persistence)
@@ -193,9 +189,6 @@ const SearchLoader = (() => {
   return { show, hide };
 })();
 
-// Legacy stubs so any leftover calls don't break
-function showLoadingScreen() { SearchLoader.show(); }
-function hideLoadingScreen() { SearchLoader.hide(); }
 
 // Force refresh Lucide SVG icons in dynamic containers
 function refreshLucideIcons() {
@@ -230,12 +223,6 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshLucideIcons();
 });
 
-/**
- * initGoogleLocationSearch – compatibility stub.
- * The homepage search is powered by the local UET bus-stop dataset.
- * This function ensures test harnesses calling it do not throw.
- */
-function initGoogleLocationSearch() { /* local stop-search only */ }
 
 // Calculate Haversine Distance (in kilometers) between two GPS points
 function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -352,7 +339,6 @@ function runNearbyRouteSearch(latitude, longitude, location, source) {
       placeId: location.placeId || null,
       source: source
     };
-    appState.selectedPlace = source === 'google' ? { ...location } : null;
     if (source !== 'stop-search') appState.highlightedStop = null;
     appState.locationSearchError = null;
     appState.activeRecommendationIndex = 0;
@@ -374,7 +360,6 @@ function runNearbyRouteSearch(latitude, longitude, location, source) {
 
 function showLocationSearchError(message) {
   appState.currentLocation = null;
-  appState.selectedPlace = null;
   appState.selectedStopSuggestion = null;
   appState.highlightedStop = null;
   appState.locationSearchError = message;
@@ -553,7 +538,6 @@ function applySelectedUetStop(entry) {
   if (input) input.value = stop.name;
   closeStopSearchDropdown();
   appState.selectedStopSuggestion = entry;
-  appState.selectedPlace = null;
   appState.locationSearchError = null;
   appState.currentLocation = {
     name: stop.name,
@@ -672,7 +656,6 @@ function navigateToPage(pageId, { resetScroll = true, updateHistory = true, rout
     renderRoutesPage();
   }
   appState.activePage = pageId;
-  if (pageId === 'routes' && routeId) document.querySelector?.('.route-back-button')?.focus({preventScroll:true});
   document.querySelectorAll('.page-section').forEach(sec => {
     sec.classList.remove('active');
   });
@@ -696,6 +679,7 @@ function navigateToPage(pageId, { resetScroll = true, updateHistory = true, rout
   }
 
   refreshLucideIcons();
+  if (pageId === 'routes' && routeId) document.querySelector?.('.route-back-button')?.focus({preventScroll:true});
   if (updateHistory) saveNavigationEntry(false, fromRouteList, resetScroll ? 0 : window.scrollY);
   if (resetScroll) window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -836,7 +820,7 @@ function initUIEvents() {
 
   document.addEventListener('keydown', handleLayerKeydown);
   window.addEventListener?.('resize', () => {
-    if (window.innerWidth > 900 && activeAccessibleLayer?.root.id === 'mobile-menu-drawer') closeMobileMenu();
+    if (window.innerWidth > 1024 && activeAccessibleLayer?.root.id === 'mobile-menu-drawer') closeMobileMenu();
   });
 
   // Campus Toggle Buttons
@@ -951,7 +935,7 @@ function detectUserGeolocation() {
 function normalizeStopSearchText(value) {
   if (typeof value !== 'string') return '';
   return value.normalize('NFKC').toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().replace(/\s+/g, ' ');
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\bgovt\b/g, 'government').trim().replace(/\s+/g, ' ');
 }
 
 // Shared by exact header lookup and partial Route Schedules filtering.
@@ -1001,7 +985,8 @@ function routeMatchesScheduleSearch(route, query) {
   // 4. Campus
   const campusLabel = route.campusId === 'ksk' ? 'ksk new campus' : 'main campus gt road';
   const campusNorm = normalizeStopSearchText(route.campusId || '');
-  if (campusNorm === normalizedQuery || campusLabel.includes(normalizedQuery)) {
+  const sourceCampus = normalizeStopSearchText(route.campus || '');
+  if (campusNorm === normalizedQuery || campusLabel.includes(normalizedQuery) || sourceCampus.includes(normalizedQuery)) {
     return true;
   }
 
@@ -1613,7 +1598,7 @@ function renderRoutesPage() {
     </div>
   `;
   if (displayRoutes.length === 0) {
-    html += `<div class="info-card no-result-box"><div class="no-result-icon"><i class="lucide-search-x"></i></div><h3>No result found</h3><p>No bus stop matching your search was found.</p></div>`;
+    html += `<div class="info-card no-result-box"><div class="no-result-icon"><i class="lucide-search-x"></i></div><h3>No matching routes found</h3><p>Try another route number, area, or stop in the selected campus.</p></div>`;
   } else {
     html += `<div class="routes-grid">${displayRoutes.map(renderRouteSummaryCard).join('')}</div>`;
   }

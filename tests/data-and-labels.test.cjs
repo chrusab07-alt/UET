@@ -337,3 +337,12 @@ test('route URL parser resolves valid IDs and safely canonicalizes invalid links
     assert.equal(h.run(`parseNavigationHash(${JSON.stringify(hash)}).routeId`), null);
   }
 });
+test('schedule search covers all fields, abbreviations, normalization and empty results', () => {
+ const h=app();
+ const route={routeNo:19,name:'Distinct Route Name',startPoint:'Start Area',campusId:'main',campus:'Main Campus',stops:[{name:'Local Govt. Complex',aliases:['Civic Offices']},{name:'MAO College'},{name:'Islam Pura',aliases:['Ismailpura']}]};
+ for(const query of ['19','Route 19','distinct','Start Area','MAIN','MAO','Islam','Local Government','  local   GOVERNMENT  ','Civic Offices','Ismailpura']) assert.equal(h.run('routeMatchesScheduleSearch('+JSON.stringify(route)+','+JSON.stringify(query)+')'),true,query);
+ h.run("appState.selectedCampus='main';appState.routeScheduleQuery='Local Government';renderRoutesPage()");
+ assert.ok(h.elements.get('routes-detail-container').innerHTML.includes('Local Govt. Complex'));
+ h.run("appState.routeScheduleQuery='zzzz-no-route';renderRoutesPage()");
+ assert.ok(h.elements.get('routes-detail-container').innerHTML.includes('No matching routes found'));
+});
