@@ -2,7 +2,8 @@
 
 let appState = {
   selectedCampus: 'ksk', // 'ksk' or 'main'
-  currentLocation: null, // { lat, lng, name }
+  currentLocation: null, // { lat, lng, name, formattedAddress, placeId, source }
+  selectedPlace: null,
   recommendationResults: null, // { status: 'within_500m' | 'nearest' | 'none', matchingRoutes, allNearby, userLat, userLng, locationLabel, targetCampus }
   activeRecommendationIndex: 0,
   locationSearchError: null,
@@ -10,6 +11,7 @@ let appState = {
   routeScheduleQuery: '',
   favorites: JSON.parse(localStorage.getItem('uet_fav_routes') || '[]'),
   selectedRouteId: null,
+  routeListScrollY: 0,
   map: null,
   markers: []
 };
@@ -66,12 +68,7 @@ function initThemeToggle() {
 
 // ─── Professional Search Loader ──────────────────────────────────────────────
 const SearchLoader = (() => {
-  const MESSAGES = [
-    '📍 Detecting your location...',
-    '🚌 Finding nearby pickup points...',
-    '🗺️ Matching UET bus routes...',
-    '✅ Preparing your results...'
-  ];
+  const MESSAGES = ['Finding nearby UET pickup points...'];
   const MIN_DURATION_MS = 1400;   // minimum visible time so fast results feel polished
   const MSG_INTERVAL_MS = 900;    // how often the message cycles
 
@@ -132,13 +129,11 @@ const SearchLoader = (() => {
     _disableButtons(true);
     _startTime = Date.now();
     _pendingHide = false;
+    _stopMessageCycle();
     _startMessageCycle();
 
     // Set first message based on action type
-    const firstMsg = type === 'gps'
-      ? '📍 Detecting your location...'
-      : '🗺️ Looking up your location...';
-    _setMessage(firstMsg);
+    _setMessage(type === 'gps' ? 'Detecting your location...' : MESSAGES[0]);
   }
 
   function hide() {
@@ -229,25 +224,35 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 }
 
 /**
- * GPS Distance-Based Route Recommendation Algorithm with Strict Campus-First Filtering
+ * Shared coordinate-based UET pickup recommendation algorithm.
  * 
  * Workflow:
  * 1. User selects campus (Main or KSK).
  * 2. Filter the route database to ONLY that selected campus (First Filter).
  * 3. Calculate distance from user's GPS coordinates to every stop in those filtered routes.
- * 4. Find the nearest stop among the filtered campus routes.
- * 5. If multiple stops are within 500 meters (0.5 km) for that campus, return all matching routes sorted by distance.
- * 6. If no stops within 500m, but stops exist within 5 km, recommend the nearest route from that campus.
+ * 4. Keep every qualifying stop as an independent pickup candidate.
+ * 5. If multiple stops are within 500 meters (0.5 km) for that campus, return all matching stops sorted by distance.
+ * 6. If no stops are within 500m, but stops exist within 5 km, recommend the nearest stop from that campus.
  * 7. If no stop found within 5 km for that campus, returns status: 'none' -> "No nearby UET bus stop found."
  */
-function findBusRoutesByGps(userLat, userLng, campusFilter = null) {
+function findNearbyRoutes(userLat, userLng, campusFilter) {
   const MAX_RADIUS_KM = 5.0;       // 5 km max radius
   const NEARBY_THRESHOLD_KM = 0.5;   // 500 meters threshold
+  const latitude = userLat;
+  const longitude = userLng;
+  const targetCampus = (campusFilter || '').toString().toLowerCase();
+
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
+      !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    return { status: 'error', error: 'Invalid location coordinates.', matchingRoutes: [], allNearby: [] };
+  }
+
+  if (targetCampus !== 'main' && targetCampus !== 'ksk') {
+    return { status: 'error', error: 'Invalid campus selection.', matchingRoutes: [], allNearby: [] };
+  }
 
   // Step 1: Resolve selected campus ('main' or 'ksk')
-  const targetCampus = (campusFilter || appState.selectedCampus || 'ksk').toString().toLowerCase();
-
-  // Step 2: Filter the route database to ONLY that campus (FIRST FILTER)
+  // Step 2: Filter the route database to ONLY that campus (FIRST FILTER).
   const campusRoutes = UET_DATA.routes.filter(route => {
     const rCampusId = (route.campusId || '').toLowerCase();
     const rCampus = (route.campus || '').toLowerCase();
@@ -260,43 +265,33 @@ function findBusRoutesByGps(userLat, userLng, campusFilter = null) {
     return rCampusId === targetCampus || rCampus === targetCampus;
   });
 
-  const routeCandidates = [];
+  const stopCandidates = [];
 
   // Step 3 & 4: Collect stops only from the filtered campus routes and calculate Haversine distance
   campusRoutes.forEach(route => {
-    let closestStop = null;
-    let minDistanceKm = Infinity;
-    let closestStopIndex = -1;
-
-    // Check every stop in the route
+    // Keep each stop separate so one route can provide multiple nearby options.
     route.stops.forEach((stop, index) => {
       // Exclude final campus destination stop if it's the terminal destination
       if (index === route.stops.length - 1 && route.stops.length > 1) {
         return;
       }
 
-      const dist = calculateDistance(userLat, userLng, stop.lat, stop.lng);
-      if (dist < minDistanceKm) {
-        minDistanceKm = dist;
-        closestStop = stop;
-        closestStopIndex = index;
+      const dist = calculateDistance(latitude, longitude, stop.lat, stop.lng);
+      if (dist <= MAX_RADIUS_KM) {
+        stopCandidates.push({
+        route: route,
+        stop: stop,
+        stopIndex: index,
+        distanceKm: dist
+        });
       }
     });
-
-    if (closestStop && minDistanceKm <= MAX_RADIUS_KM) {
-      routeCandidates.push({
-        route: route,
-        stop: closestStop,
-        stopIndex: closestStopIndex,
-        distanceKm: minDistanceKm
-      });
-    }
   });
 
-  // Sort by nearest distance ascending
-  routeCandidates.sort((a, b) => a.distanceKm - b.distanceKm);
+  // Sort individual pickup stops by distance, not routes.
+  stopCandidates.sort((a, b) => a.distanceKm - b.distanceKm);
 
-  if (routeCandidates.length === 0) {
+  if (stopCandidates.length === 0) {
     return {
       status: 'none',
       targetCampus: targetCampus,
@@ -305,46 +300,69 @@ function findBusRoutesByGps(userLat, userLng, campusFilter = null) {
     };
   }
 
-  // Filter routes within 500 meters
-  const within500m = routeCandidates.filter(item => item.distanceKm <= NEARBY_THRESHOLD_KM);
+  // Filter stops within 500 meters; multiple stops from one route remain visible.
+  const within500m = stopCandidates.filter(item => item.distanceKm <= NEARBY_THRESHOLD_KM);
 
   if (within500m.length > 0) {
     return {
       status: 'within_500m',
       targetCampus: targetCampus,
       matchingRoutes: within500m,
-      allNearby: routeCandidates
+      allNearby: stopCandidates
     };
   }
 
-  // Fallback: nearest stop within 5 km from the selected campus
+  // Fallback: nearest individual stop within 5 km from the selected campus.
   return {
     status: 'nearest',
     targetCampus: targetCampus,
-    matchingRoutes: [routeCandidates[0]],
-    allNearby: routeCandidates
+    matchingRoutes: [stopCandidates[0]],
+    allNearby: stopCandidates
   };
 }
 
-function recommendRoutesByGps(userLat, userLng, locationLabel, campusFilter = null) {
-  const targetCampus = campusFilter || appState.selectedCampus || 'ksk';
-  const result = findBusRoutesByGps(userLat, userLng, targetCampus);
+function runNearbyRouteSearch(latitude, longitude, location, source) {
+  SearchLoader.show();
+  try {
+    const targetCampus = appState.selectedCampus;
+    const result = findNearbyRoutes(latitude, longitude, targetCampus);
+    if (result.status === 'error') {
+      showLocationSearchError(result.error);
+      return result;
+    }
 
-  appState.currentLocation = {
-    lat: userLat,
-    lng: userLng,
-    name: locationLabel
-  };
-  appState.locationSearchError = null;
-  appState.activeRecommendationIndex = 0;
-  appState.recommendationResults = {
-    ...result,
-    userLat: userLat,
-    userLng: userLng,
-    locationLabel: locationLabel,
-    campus: targetCampus
-  };
+    appState.currentLocation = {
+      lat: Number(latitude),
+      lng: Number(longitude),
+      name: location.name,
+      formattedAddress: location.formattedAddress || location.name,
+      placeId: location.placeId || null,
+      source: source
+    };
+    appState.selectedPlace = source === 'google' ? { ...location } : null;
+    appState.locationSearchError = null;
+    appState.activeRecommendationIndex = 0;
+    appState.recommendationResults = {
+      ...result,
+      userLat: Number(latitude),
+      userLng: Number(longitude),
+      locationLabel: location.formattedAddress || location.name,
+      campus: targetCampus
+    };
 
+    renderResultPage();
+    navigateToPage('result');
+    return result;
+  } finally {
+    SearchLoader.hide();
+  }
+}
+
+function showLocationSearchError(message) {
+  appState.currentLocation = null;
+  appState.selectedPlace = null;
+  appState.locationSearchError = message;
+  appState.recommendationResults = null;
   renderResultPage();
   navigateToPage('result');
 }
@@ -387,65 +405,37 @@ function initGoogleLocationSearch() {
   }
 
   const autocomplete = new window.google.maps.places.Autocomplete(input, {
-    types: ['geocode'],
-    componentRestrictions: { country: 'pk' }
+    componentRestrictions: { country: 'pk' },
+    fields: ['place_id', 'name', 'formatted_address', 'geometry']
   });
 
   autocomplete.addListener('place_changed', () => {
     const place = autocomplete.getPlace();
     const loc = place && place.geometry && place.geometry.location;
-    if (!loc) {
-      appState.locationSearchError = 'Location coordinates not found. Please select a valid location from the suggestions or use "Detect My Area".';
-      appState.recommendationResults = null;
-      renderResultPage();
-      navigateToPage('result');
+    if (!loc || typeof loc.lat !== 'function' || typeof loc.lng !== 'function') {
+      showLocationSearchError('Place details are unavailable. Please select a location from the suggestions or use "Detect My Area".');
       return;
     }
 
     const lat = loc.lat();
     const lng = loc.lng();
-    const label = place.formatted_address || input.value.trim();
-    recommendRoutesByGps(lat, lng, label, appState.selectedCampus);
+    const selectedPlace = {
+      name: place.name || input.value.trim(),
+      formattedAddress: place.formatted_address || input.value.trim(),
+      lat,
+      lng,
+      placeId: place.place_id || null
+    };
+    if (!hasValidSelectedPlace(selectedPlace)) {
+      showLocationSearchError('Place details are unavailable. Please select a location from the suggestions or use "Detect My Area".');
+      return;
+    }
+    appState.selectedPlace = selectedPlace;
+    input.value = selectedPlace.formattedAddress;
+    handleLocationSearch();
   });
 
   input.dataset.googleAutocompleteBound = 'true';
-}
-
-async function geocodeLocationQuery(query) {
-  const trimmed = (query || '').trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const apiKey = getGoogleMapsApiKey();
-  if (apiKey) {
-    try {
-      const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(trimmed + ', Lahore, Pakistan')}&key=${apiKey}`);
-      const data = await response.json();
-      const result = data && data.results && data.results[0];
-      if (data.status === 'OK' && result && result.geometry && result.geometry.location) {
-        return {
-          lat: result.geometry.location.lat,
-          lng: result.geometry.location.lng,
-          formattedAddress: result.formatted_address || trimmed
-        };
-      }
-    } catch (error) {
-      console.warn('Google Geocoding lookup failed:', error);
-    }
-  }
-
-  // Exact match on predefined popular area coordinates only
-  const exactArea = POPULAR_AREAS.find(a => a.name.toLowerCase() === trimmed.toLowerCase());
-  if (exactArea) {
-    return {
-      lat: exactArea.lat,
-      lng: exactArea.lng,
-      formattedAddress: exactArea.name
-    };
-  }
-
-  return null;
 }
 
 function getDisplayDriverPhone(route) {
@@ -469,7 +459,14 @@ function setSelectedCampus(campusId) {
 
   // If on result page with an active location, re-run recommendation with new campus filter
   if (appState.currentLocation && appState.activePage === 'result') {
-    recommendRoutesByGps(appState.currentLocation.lat, appState.currentLocation.lng, appState.currentLocation.name, campusId);
+    const location = appState.currentLocation;
+    runNearbyRouteSearch(location.lat, location.lng, {
+      name: location.name,
+      formattedAddress: location.formattedAddress || location.name,
+      lat: location.lat,
+      lng: location.lng,
+      placeId: location.placeId
+    }, location.source || 'gps');
   }
 }
 
@@ -600,8 +597,14 @@ function initUIEvents() {
   // Location Search Box Input
   const mainSearchInput = document.getElementById('main-location-input');
   if (mainSearchInput) {
+    mainSearchInput.addEventListener('input', () => {
+      appState.selectedPlace = null;
+    });
     mainSearchInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') handleLocationSearch();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleLocationSearch();
+      }
     });
   }
 
@@ -655,41 +658,35 @@ function initUIEvents() {
 // Geolocation Handler - Uses pure browser Geolocation API coordinates
 function detectUserGeolocation() {
   if (!navigator.geolocation) {
-    alert("Geolocation is not supported by your browser. Please select a popular area.");
+    showLocationSearchError('Geolocation is not supported by your browser. Please select a Google place.');
     return;
   }
 
-  // Show polished loading overlay immediately
   SearchLoader.show('gps');
-
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      const userLat = pos.coords.latitude;
-      const userLng = pos.coords.longitude;
-
+      const { latitude, longitude } = pos.coords;
       const input = document.getElementById('main-location-input');
-      if (input) {
-        input.value = `GPS (${userLat.toFixed(4)}, ${userLng.toFixed(4)})`;
+      if (input && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        input.value = `GPS (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`;
       }
-
-      recommendRoutesByGps(userLat, userLng, "Your Current GPS Location", appState.selectedCampus);
-      SearchLoader.hide();
+      runNearbyRouteSearch(latitude, longitude, {
+        name: 'Your Current GPS Location',
+        formattedAddress: 'Your Current GPS Location'
+      }, 'gps');
     },
     (err) => {
-      console.error("GPS detection error:", err);
-      appState.locationSearchError = "Could not retrieve your GPS location. Please allow location access in your browser or choose a popular area below.";
-      appState.recommendationResults = null;
+      const message = err.code === 1
+        ? 'Location permission was denied. Please allow access or select a Google place.'
+        : err.code === 3
+          ? 'Location detection timed out. Please try again or select a Google place.'
+          : 'Your location is unavailable. Please try again or select a Google place.';
       SearchLoader.hide();
-      // Give loader time to fade, then navigate
-      setTimeout(() => {
-        renderResultPage();
-        navigateToPage('result');
-      }, 500);
+      showLocationSearchError(message);
     },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
   );
 }
-
 function normalizeStopSearchText(value) {
   return (value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
@@ -747,44 +744,23 @@ function handleHeaderStopSearch() {
   }, 100);
 }
 
-// Location Text Search Handler - Geocodes to lat/lng then runs GPS distance algorithm for selected campus
-async function handleLocationSearch() {
-  const rawQuery = document.getElementById('main-location-input').value.trim();
-  if (!rawQuery) {
-    appState.locationSearchError = 'Please enter a location or click "Detect My Area" to use GPS coordinates.';
-    appState.recommendationResults = null;
-    renderResultPage();
-    navigateToPage('result');
+// Validate Places data before entering the shared route-search workflow.
+function hasValidSelectedPlace(place) {
+  return !!place &&
+    Number.isFinite(place.lat) && place.lat >= -90 && place.lat <= 90 &&
+    Number.isFinite(place.lng) && place.lng >= -180 && place.lng <= 180 &&
+    typeof place.formattedAddress === 'string' && place.formattedAddress.trim().length > 0;
+}
+// Location Text Search Handler - only a selected Google place may provide coordinates.
+function handleLocationSearch() {
+  const input = document.getElementById('main-location-input');
+  const selectedPlace = appState.selectedPlace;
+  if (!hasValidSelectedPlace(selectedPlace) || !input || input.value.trim() !== selectedPlace.formattedAddress) {
+    showLocationSearchError('Please select a location from the suggestions.');
     return;
   }
 
-  // Show polished loading overlay
-  SearchLoader.show('find');
-
-  try {
-    const geocode = await geocodeLocationQuery(rawQuery);
-    if (!geocode) {
-      appState.locationSearchError = `Location not recognized. Please click "Detect My Area" to use your GPS location or pick a popular area below.`;
-      appState.recommendationResults = null;
-      SearchLoader.hide();
-      setTimeout(() => {
-        renderResultPage();
-        navigateToPage('result');
-      }, 500);
-      return;
-    }
-
-    recommendRoutesByGps(geocode.lat, geocode.lng, geocode.formattedAddress || rawQuery, appState.selectedCampus);
-    SearchLoader.hide();
-  } catch (error) {
-    appState.locationSearchError = 'Location lookup failed. Please click "Detect My Area" to use your GPS location.';
-    appState.recommendationResults = null;
-    SearchLoader.hide();
-    setTimeout(() => {
-      renderResultPage();
-      navigateToPage('result');
-    }, 500);
-  }
+  runNearbyRouteSearch(selectedPlace.lat, selectedPlace.lng, selectedPlace, 'google');
 }
 
 // Quick Chip Select - passes coordinates into pure GPS distance algorithm for selected campus
@@ -793,7 +769,12 @@ function selectAreaChip(areaName) {
   if (area) {
     const input = document.getElementById('main-location-input');
     if (input) input.value = area.name;
-    recommendRoutesByGps(area.lat, area.lng, area.name, appState.selectedCampus);
+    runNearbyRouteSearch(area.lat, area.lng, {
+      name: area.name,
+      formattedAddress: area.name,
+      lat: area.lat,
+      lng: area.lng
+    }, 'quick-chip');
   }
 }
 
@@ -990,18 +971,18 @@ function renderResultPage() {
     `;
   });
 
-  // If multiple routes within 500m for this campus
+  // Show every nearby pickup candidate, including multiple stops on one route.
   const isMultiMatch = rec.matchingRoutes.length > 1;
   let multiRouteSelectorHtml = '';
   if (isMultiMatch) {
     multiRouteSelectorHtml = `
       <div class="info-card" style="margin-bottom:1.25rem;">
         <div class="info-card-title">
-          <i class="lucide-route" style="color:var(--primary-light)"></i>
-          <span>Multiple Matching ${campusLabel} Routes Within 500 Meters (${rec.matchingRoutes.length} Found)</span>
+          <i class="lucide-map-pin" style="color:var(--primary-light)"></i>
+          <span>Nearby Pickup Options (${rec.matchingRoutes.length} Found)</span>
         </div>
         <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1rem;">
-          The following ${campusLabel} bus routes have pickup stops within 500 meters of your GPS location, sorted by distance:
+          Pickup stops within 500 meters of your location, sorted from nearest to farthest:
         </p>
         <div style="display:flex; flex-direction:column; gap:0.6rem;">
           ${rec.matchingRoutes.map((item, i) => {
@@ -1010,17 +991,21 @@ function renderResultPage() {
             return `
               <div onclick="selectActiveRecommendation(${i})" style="cursor:pointer; background:${isSelected ? 'var(--bg-surface-highlight)' : 'var(--bg-surface-subtle)'}; border:2px solid ${isSelected ? 'var(--primary-light)' : 'var(--border-light)'}; border-radius:var(--radius-md); padding:0.85rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; transition:var(--transition-fast);">
                 <div style="display:flex; align-items:center; gap:0.75rem;">
-                  <span class="route-badge">${item.route.routeNo}</span>
                   <div>
-                    <div style="font-weight:700; color:var(--heading-color); font-size:0.95rem;">${item.route.name}</div>
+                    <div style="font-weight:700; color:var(--heading-color); font-size:0.95rem;">${item.stop.name}</div>
                     <div style="font-size:0.82rem; color:var(--text-muted);">
-                      Nearest Stop: <strong>${item.stop.name}</strong> (${item.stop.time}) &bull; ${item.route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}
+                      Route ${item.route.routeNo} &bull; ${item.route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style="font-size:0.82rem; color:var(--text-muted);">
+                      Pickup time: <strong>${item.stop.time}</strong>
                     </div>
                   </div>
                 </div>
                 <div style="display:flex; align-items:center; gap:0.5rem;">
                   <span class="distance-badge"><i class="lucide-map-pin"></i> ${distStr} away</span>
-                  <span style="font-size:0.8rem; font-weight:600; color:${isSelected ? 'var(--primary-light)' : 'var(--text-muted)'};">${isSelected ? '✓ Selected' : 'View Details'}</span>
+                  <span style="font-size:0.8rem; font-weight:600; color:${isSelected ? 'var(--primary-light)' : 'var(--text-muted)'};">${isSelected ? '✓ Recommended' : 'Select'}</span>
                 </div>
               </div>
             `;
@@ -1030,8 +1015,10 @@ function renderResultPage() {
     `;
   }
 
-  // Other nearby routes within 5 km for this campus
-  const otherNearby = rec.allNearby.filter(item => !rec.matchingRoutes.some(m => m.route.id === item.route.id)).slice(0, 4);
+  // Other nearby pickup points within 5 km for this campus.
+  const otherNearby = rec.allNearby
+    .filter(item => !rec.matchingRoutes.some(m => m.route.id === item.route.id && m.stopIndex === item.stopIndex))
+    .slice(0, 4);
   let otherNearbyHtml = '';
   if (otherNearby.length > 0) {
     otherNearbyHtml = `
@@ -1194,143 +1181,142 @@ function renderResultPage() {
   }, 100);
 }
 
-// Render Route Details View Page
+function renderRouteSummaryCard(route) {
+  const firstStop = route.stops[0];
+  const driverPhone = route.campusId === 'main' ? 'N/A' : route.driverPhone;
+  return `
+    <article class="route-card" id="route-card-${route.id}">
+      <div>
+        <div class="route-card-header">
+          <span class="route-badge">Route ${route.routeNo}</span>
+          <span class="campus-chip">${route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}</span>
+        </div>
+        <h3 class="route-card-title">${route.name}</h3>
+        <p class="route-card-stops">Starts at ${route.startPoint || firstStop.name}</p>
+        <div class="route-meta-grid">
+          <div class="meta-item"><i class="lucide-user"></i><span>${route.driverName}</span></div>
+          <div class="meta-item"><i class="lucide-phone"></i><span>${driverPhone}</span></div>
+          <div class="meta-item"><i class="lucide-bus"></i><span>${getDisplayVehicleNo(route)}</span></div>
+          <div class="meta-item"><i class="lucide-clock"></i><span>${firstStop.time} report</span></div>
+          <div class="meta-item"><i class="lucide-map-pin"></i><span>${firstStop.name}</span></div>
+          <div class="meta-item"><i class="lucide-list"></i><span>${route.stops.length} stops</span></div>
+        </div>
+      </div>
+      <div class="route-card-actions">
+        <button class="btn-card-primary" onclick="viewRouteDetail('${route.id}')">
+          <i class="lucide-arrow-right"></i> View Full Route
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderRouteDetailView(route) {
+  const isFav = appState.favorites.includes(route.id);
+  const campusLabel = route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus';
+  const firstStop = route.stops[0];
+  return `
+    <button class="btn-secondary route-back-button" onclick="returnToRouteList()">
+      <i class="lucide-arrow-left"></i> Back to Route Schedules
+    </button>
+    <div class="route-detail-heading">
+      <div>
+        <h2>Route ${route.routeNo} - Full Details</h2>
+        <p>${route.name}</p>
+      </div>
+      <span class="campus-chip">${campusLabel}</span>
+    </div>
+    <div class="details-split-grid">
+      <div class="info-card">
+        <div class="info-card-title"><i class="lucide-bus"></i><span>Complete Route Stops & Morning Schedule</span></div>
+        <div class="route-detail-meta">
+          <span><strong>Reporting:</strong> ${firstStop.time}</span>
+          <span><strong>Arrival:</strong> ${route.arrivalTime}</span>
+          <span><strong>Stops:</strong> ${route.stops.length}</span>
+        </div>
+        <div class="stops-timeline schedule-timeline">
+          ${route.stops.map((s, idx) => `
+            <div class="timeline-item ${idx === route.stops.length - 1 ? 'destination' : ''}" style="--timeline-delay:${idx * 70}ms;">
+              <div class="timeline-marker" aria-hidden="true"></div>
+              <div class="timeline-stop-content">
+                <div class="timeline-name">${s.name}${idx === route.stops.length - 1 ? '<span class="timeline-status">Campus Destination</span>' : ''}</div>
+                <div class="timeline-stop-meta">Stop #${idx + 1}</div>
+              </div>
+              <div class="timeline-time">${s.time}</div>
+            </div>
+          `).join('')}
+        </div>
+        ${route.notes ? `<div class="route-notes"><strong>Note:</strong> ${route.notes}</div>` : ''}
+      </div>
+      <div class="info-card">
+        <div class="info-card-title"><i class="lucide-user-check"></i><span>Driver & Vehicle Information</span></div>
+        <div class="driver-contact-box">
+          <div class="driver-avatar">${route.driverName.charAt(0)}</div>
+          <div class="driver-info">
+            <h4>${route.driverName}</h4>
+            <p>${route.campusId === 'main' ? 'Contact unavailable' : route.driverPhone}</p>
+          </div>
+          ${route.campusId === 'main' ? '' : `<a href="tel:${route.driverPhone}" class="btn-call"><i class="lucide-phone-call"></i> Call</a>`}
+        </div>
+        <div class="route-detail-facts">
+          <div><span>Bus Number</span><strong>${getDisplayVehicleNo(route)}</strong></div>
+          <div><span>Start Area</span><strong>${route.startPoint || firstStop.name}</strong></div>
+          <div><span>Campus Arrival</span><strong>${route.arrivalTime}</strong></div>
+        </div>
+        <div class="route-detail-actions">
+          <button class="btn-secondary" onclick="printRouteSchedule('${route.id}')"><i class="lucide-printer"></i> Print / Download</button>
+          <button class="btn-secondary ${isFav ? 'active' : ''}" onclick="toggleFavorite('${route.id}', this)"><i class="lucide-bookmark"></i> ${isFav ? 'Saved' : 'Save Route'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Render Route Schedules as summary cards or one selected route detail.
 function renderRoutesPage() {
   const container = document.getElementById('routes-detail-container');
   if (!container) return;
 
-  const routeSearchQuery = normalizeStopSearchText(appState.routeScheduleQuery);
-  const campusFilteredRoutes = UET_DATA.routes.filter(r => 
-    !appState.selectedCampus || r.campusId === appState.selectedCampus
-  );
-  const selectedRoutes = routeSearchQuery
-    ? campusFilteredRoutes.filter(route =>
-        route.stops.some(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery))
-      )
-    : campusFilteredRoutes;
-  const displayRoutes = selectedRoutes;
+  if (appState.selectedRouteId) {
+    const selectedRoute = UET_DATA.routes.find(route => route.id === appState.selectedRouteId);
+    if (selectedRoute) {
+      container.innerHTML = renderRouteDetailView(selectedRoute);
+      refreshLucideIcons();
+      return;
+    }
+    appState.selectedRouteId = null;
+  }
 
+  const routeSearchQuery = normalizeStopSearchText(appState.routeScheduleQuery);
+  const campusFilteredRoutes = UET_DATA.routes.filter(route =>
+    !appState.selectedCampus || route.campusId === appState.selectedCampus
+  );
+  const displayRoutes = routeSearchQuery
+    ? campusFilteredRoutes.filter(route =>
+      route.stops.some(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery))
+    )
+    : campusFilteredRoutes;
   let html = `
-    <div style="margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+    <div class="route-schedules-heading">
       <div>
         <h2>Official UET Bus Routes (${appState.selectedCampus === 'ksk' ? 'KSK New Campus' : 'Main Campus - 22 Morning Routes'})</h2>
-        <p style="color:var(--text-muted); font-size:0.9rem;">Morning Arrival Schedules extracted from official Transport Office PDF</p>
+        <p>Morning Arrival Schedules extracted from official Transport Office PDF</p>
       </div>
     </div>
-
-    <div class="info-card" style="margin-bottom:1.5rem;">
+    <div class="info-card route-campus-filter">
       <div class="campus-toggle-wrapper" style="justify-content:flex-start; margin:0;">
-        <button class="route-campus-btn ${appState.selectedCampus === 'main' ? 'active' : ''}" data-campus="main">
-          <i class="lucide-graduation-cap"></i> Main Campus
-        </button>
-        <button class="route-campus-btn ${appState.selectedCampus === 'ksk' ? 'active' : ''}" data-campus="ksk">
-          <i class="lucide-building-2"></i> KSK Campus
-        </button>
+        <button class="route-campus-btn ${appState.selectedCampus === 'main' ? 'active' : ''}" data-campus="main"><i class="lucide-graduation-cap"></i> Main Campus</button>
+        <button class="route-campus-btn ${appState.selectedCampus === 'ksk' ? 'active' : ''}" data-campus="ksk"><i class="lucide-building-2"></i> KSK Campus</button>
       </div>
     </div>
   `;
-
-  if (routeSearchQuery && displayRoutes.length === 0) {
-    html += `
-      <div class="info-card no-result-box">
-        <div class="no-result-icon"><i class="lucide-search-x"></i></div>
-        <h3>No result found</h3>
-        <p>No bus stop matching your search was found.</p>
-      </div>
-    `;
-    container.innerHTML = html;
-    return;
+  if (displayRoutes.length === 0) {
+    html += `<div class="info-card no-result-box"><div class="no-result-icon"><i class="lucide-search-x"></i></div><h3>No result found</h3><p>No bus stop matching your search was found.</p></div>`;
+  } else {
+    html += `<div class="routes-grid">${displayRoutes.map(renderRouteSummaryCard).join('')}</div>`;
   }
-
-  displayRoutes.forEach(route => {
-    const isFav = appState.favorites.includes(route.id);
-    const exactMatchIndex = route.stops.findIndex(stop => normalizeStopSearchText(stop.name) === routeSearchQuery);
-    const fallbackMatchIndex = routeSearchQuery
-      ? route.stops.findIndex(stop => normalizeStopSearchText(stop.name).includes(routeSearchQuery))
-      : -1;
-    const matchedIndex = exactMatchIndex >= 0 ? exactMatchIndex : fallbackMatchIndex;
-
-    html += `
-      <div class="info-card" id="route-card-${route.id}" style="margin-bottom:1.75rem;">
-        <div class="info-card-title" style="flex-wrap:wrap; gap:0.5rem;">
-          <span class="route-badge">${route.routeNo}</span>
-          <span style="font-size:1.15rem; font-weight:700; color:var(--heading-color);">${route.name}</span>
-          <span class="campus-chip" style="margin-left:auto;">${route.campusId === 'ksk' ? 'KSK Campus' : 'Main Campus'}</span>
-        </div>
-
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:1rem; margin-bottom:1.25rem; background:var(--bg-surface-subtle); border:1px solid var(--border-subtle); padding:1rem; border-radius:var(--radius-md);">
-          <div>
-            <div style="font-size:0.8rem; color:var(--text-muted);">Driver Name</div>
-            <div style="font-weight:700; color:var(--heading-color);">${route.driverName}</div>
-          </div>
-          <div>
-            <div style="font-size:0.8rem; color:var(--text-muted);">Driver Mobile</div>
-            <div style="font-weight:700;">${route.campusId === 'main' ? 'N/A' : `<a href="tel:${route.driverPhone}"><i class="lucide-phone" style="font-size:0.8rem;"></i> ${route.driverPhone}</a>`}</div>
-          </div>
-          <div>
-            <div style="font-size:0.8rem; color:var(--text-muted);">Bus Registration No.</div>
-            <div style="font-weight:700; color:var(--heading-color);">${getDisplayVehicleNo(route)}</div>
-          </div>
-          <div>
-            <div style="font-size:0.8rem; color:var(--text-muted);">Morning Campus Arrival</div>
-            <div style="font-weight:700; color:var(--success);">${route.arrivalTime}</div>
-          </div>
-        </div>
-
-        <h4 style="font-size:0.95rem; color:var(--heading-color); margin-bottom:0.75rem;">
-          <i class="lucide-list" style="font-size:0.9rem;"></i> Morning Pickup Stops & Sequence
-        </h4>
-
-        <div class="stops-timeline schedule-timeline" style="margin-bottom:1rem;">
-          ${route.stops.map((s, idx) => {
-            const isMatch = !!routeSearchQuery && idx === matchedIndex;
-            const isDestination = idx === route.stops.length - 1;
-            return `
-              <div class="timeline-item ${isMatch ? 'nearest' : ''} ${isDestination ? 'destination' : ''} ${isMatch ? 'route-search-match' : ''}" style="--timeline-delay:${idx * 70}ms;" ${isMatch ? 'data-stop-match="true"' : ''}>
-                <div class="timeline-marker" aria-hidden="true"></div>
-                <div class="timeline-stop-content">
-                  <div class="timeline-name">
-                    ${s.name}
-                    ${isDestination ? '<span class="timeline-status">Campus Destination</span>' : ''}
-                    ${isMatch ? '<span class="timeline-status">Matched Stop</span>' : ''}
-                  </div>
-                  <div class="timeline-stop-meta">Stop #${idx + 1}</div>
-                </div>
-                <div class="timeline-time">${s.time}</div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-
-        ${route.notes ? `
-          <div style="font-size:0.85rem; color:var(--text-muted); background:var(--accent-soft); padding:0.75rem 1rem; border-radius:var(--radius-sm); border-left:3px solid var(--accent); margin-bottom:1rem;">
-            <strong>Note:</strong> ${route.notes}
-          </div>
-        ` : ''}
-
-        <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
-          <button class="btn-secondary" onclick="printRouteSchedule('${route.id}')">
-            <i class="lucide-printer"></i> Download Route PDF / Print
-          </button>
-          <button class="btn-secondary ${isFav ? 'active' : ''}" onclick="toggleFavorite('${route.id}', this)">
-            <i class="lucide-bookmark"></i> ${isFav ? 'Saved' : 'Save Route'}
-          </button>
-        </div>
-      </div>
-    `;
-  });
-
   container.innerHTML = html;
   refreshLucideIcons();
-
-  if (routeSearchQuery) {
-    setTimeout(() => {
-      const highlightedMatch = document.querySelector('.route-search-match');
-      if (highlightedMatch) {
-        highlightedMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }, 100);
-  }
 }
 
 // Leaflet Map Initialization Helper
@@ -1357,24 +1343,23 @@ function initLeafletMap(containerId, centerCoords, zoomLevel, points) {
   });
 }
 
-// View specific route detail (scroll or navigate)
+// View one route without rendering the other route details.
 function viewRouteDetail(routeId) {
   const route = UET_DATA.routes.find(r => r.id === routeId);
   if (!route) return;
 
-  appState.selectedCampus = route.campusId;
-  document.querySelectorAll('.campus-btn, .route-campus-btn, .result-campus-btn').forEach(b => {
-    if (b.dataset.campus === route.campusId) b.classList.add('active');
-    else b.classList.remove('active');
-  });
+  appState.routeListScrollY = window.scrollY;
+  appState.selectedRouteId = routeId;
+  navigateToPage('routes');
+  renderRoutesPage();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 
+function returnToRouteList() {
+  appState.selectedRouteId = null;
   renderRoutesPage();
   navigateToPage('routes');
-
-  setTimeout(() => {
-    const el = document.getElementById(`route-card-${routeId}`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, 200);
+  setTimeout(() => window.scrollTo({ top: appState.routeListScrollY, behavior: 'smooth' }), 0);
 }
 
 // Toggle Save / Favorite Route
