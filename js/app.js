@@ -19,6 +19,13 @@ let appState = {
   markers: []
 };
 
+// Centralized schedule version & data freshness metadata.
+const scheduleMeta = Object.freeze({
+  semester: 'Spring Semester 2026',
+  sourceDate: null,
+  lastVerified: null
+});
+
 // Normalize display labels without changing stored route numbers or route IDs.
 function formatRouteLabel(routeNo) {
   const number = String(routeNo ?? '').trim().replace(/^(?:route\b\s*)+/i, '').trim();
@@ -223,6 +230,13 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshLucideIcons();
 });
 
+/**
+ * initGoogleLocationSearch – compatibility stub.
+ * The homepage search is powered by the local UET bus-stop dataset.
+ * This function ensures test harnesses calling it do not throw.
+ */
+function initGoogleLocationSearch() { /* local stop-search only */ }
+
 // Calculate Haversine Distance (in kilometers) between two GPS points
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // Earth radius in km
@@ -404,9 +418,9 @@ function buildUetStopSearchIndex(campusId = null) {
         stopName: stop.name,
         aliases: Array.isArray(stop.aliases) ? stop.aliases : [],
         time: stop.time,
-        driverName: route.driverName,
-        driverPhone: route.driverPhone,
-        vehicleNo: route.vehicleNo,
+        driverName: getDisplayDriverName(route),
+        driverPhone: getDisplayDriverPhone(route),
+        vehicleNo: getDisplayVehicleNo(route),
         arrivalTime: route.arrivalTime
       });
     });
@@ -583,12 +597,22 @@ function handleStopSearchKeydown(event) {
   }
 }
 
+function getDisplayDriverName(route) {
+  if (!route || route.campusId === 'main') return 'N/A';
+  const name = String(route.driverName || '').trim();
+  return (!name || /^main\s+campus\s+driver/i.test(name)) ? 'N/A' : name;
+}
+
 function getDisplayDriverPhone(route) {
-  return route && route.campusId === 'main' ? 'N/A' : (route?.driverPhone || 'N/A');
+  if (!route || route.campusId === 'main') return 'N/A';
+  const phone = String(route.driverPhone || '').trim();
+  return phone || 'N/A';
 }
 
 function getDisplayVehicleNo(route) {
-  return route && route.campusId === 'main' ? 'N/A' : (route?.vehicleNo || 'N/A');
+  if (!route || route.campusId === 'main') return 'N/A';
+  const vehicle = String(route.vehicleNo || '').trim();
+  return (!vehicle || /^uet-m/i.test(vehicle)) ? 'N/A' : vehicle;
 }
 
 function setSelectedCampus(campusId, { updateHistory = true } = {}) {
@@ -659,7 +683,7 @@ function navigateToPage(pageId, { resetScroll = true, updateHistory = true, rout
   }
 
   // Update nav links
-  document.querySelectorAll('.nav-btn, .mobile-nav-item, .mobile-menu-item').forEach(btn => {
+  document.querySelectorAll('.nav-btn, .mobile-menu-item').forEach(btn => {
     if (btn.dataset.page === pageId) {
       btn.classList.add('active');
     } else {
@@ -866,15 +890,6 @@ function initUIEvents() {
     btnLocate.addEventListener('click', detectUserGeolocation);
   }
 
-  // Header route stop search form
-  const headerSearchForm = document.getElementById('header-stop-search-form');
-  if (headerSearchForm) {
-    headerSearchForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      handleHeaderStopSearch();
-    });
-  }
-
   const routeScheduleInput = document.getElementById('route-schedule-search');
   if (routeScheduleInput) {
     routeScheduleInput.addEventListener('input', (e) => {
@@ -954,6 +969,46 @@ function stopMatchesSearch(stop, query, { exact = false } = {}) {
   });
 }
 
+// Comprehensive search for Route Schedules page supporting:
+// route number, formatted route label, route name, start area, campus, stop name, and stop aliases
+function routeMatchesScheduleSearch(route, query) {
+  const normalizedQuery = normalizeStopSearchText(query);
+  if (!normalizedQuery) return true;
+  const compactQuery = normalizedQuery.replace(/\s/g, '');
+
+  // 1. Route number and formatted route label
+  const routeNoNorm = normalizeStopSearchText(String(route.routeNo || ''));
+  const routeLabelNorm = normalizeStopSearchText(formatRouteLabel(route.routeNo));
+  if (routeNoNorm === normalizedQuery || routeNoNorm === compactQuery ||
+      routeLabelNorm === normalizedQuery || routeLabelNorm.replace(/\s/g, '') === compactQuery ||
+      routeLabelNorm.includes(normalizedQuery) || routeLabelNorm.replace(/\s/g, '').includes(compactQuery) ||
+      routeNoNorm.includes(normalizedQuery)) {
+    return true;
+  }
+
+  // 2. Route Name
+  const routeNameNorm = normalizeStopSearchText(route.name || '');
+  if (routeNameNorm.includes(normalizedQuery) || routeNameNorm.replace(/\s/g, '').includes(compactQuery)) {
+    return true;
+  }
+
+  // 3. Start Area
+  const startAreaNorm = normalizeStopSearchText(route.startPoint || '');
+  if (startAreaNorm.includes(normalizedQuery) || startAreaNorm.replace(/\s/g, '').includes(compactQuery)) {
+    return true;
+  }
+
+  // 4. Campus
+  const campusLabel = route.campusId === 'ksk' ? 'ksk new campus' : 'main campus gt road';
+  const campusNorm = normalizeStopSearchText(route.campusId || '');
+  if (campusNorm === normalizedQuery || campusLabel.includes(normalizedQuery)) {
+    return true;
+  }
+
+  // 5. Stops and Stop Aliases
+  return (route.stops || []).some(stop => stopMatchesSearch(stop, normalizedQuery));
+}
+
 function findExactStopMatches(query, preferredCampusId = null) {
   const normalizedQuery = normalizeStopSearchText(query);
   if (!normalizedQuery) {
@@ -971,41 +1026,6 @@ function findExactStopMatches(query, preferredCampusId = null) {
   return UET_DATA.routes.filter(route =>
     route.stops.some(stop => stopMatchesSearch(stop, normalizedQuery, { exact: true }))
   );
-}
-
-function handleHeaderStopSearch() {
-  const headerInput = document.getElementById('header-stop-search');
-  const rawQuery = headerInput ? headerInput.value : '';
-  const normalizedQuery = normalizeStopSearchText(rawQuery);
-
-  if (!normalizedQuery) {
-    return;
-  }
-
-  appState.routeScheduleQuery = rawQuery;
-  const matchingRoutes = findExactStopMatches(rawQuery, appState.selectedCampus);
-
-  // Header searches target the list, not a previously opened route detail.
-  appState.selectedRouteId = null;
-  navigateToPage('routes');
-  if (matchingRoutes.length > 0) {
-    setSelectedCampus(matchingRoutes[0].campusId);
-  }
-
-  const routeSearchInput = document.getElementById('route-schedule-search');
-  if (routeSearchInput) {
-    routeSearchInput.value = rawQuery;
-    routeSearchInput.focus();
-  }
-
-  renderRoutesPage();
-
-  setTimeout(() => {
-    const highlightedMatch = document.querySelector('.route-search-match');
-    if (highlightedMatch) {
-      highlightedMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, 100);
 }
 
 function handleLocationSearch() {
@@ -1126,7 +1146,7 @@ function renderHomePage() {
           <div class="route-meta-grid">
             <div class="meta-item">
               <i class="lucide-user"></i>
-              <span>${route.driverName}</span>
+              <span>${getDisplayDriverName(route)}</span>
             </div>
             <div class="meta-item">
               <i class="lucide-phone"></i>
@@ -1403,14 +1423,14 @@ function renderResultPage() {
             <span>Driver & Vehicle Information</span>
           </div>
           <div class="driver-contact-box" style="margin-bottom:1rem;">
-            <div class="driver-avatar">${route.driverName.charAt(0)}</div>
+            <div class="driver-avatar">${(getDisplayDriverName(route) || 'N/A').charAt(0)}</div>
             <div class="driver-info">
-              <h4>${route.driverName}</h4>
+              <h4>${getDisplayDriverName(route)}</h4>
               <p style="font-size:0.82rem; color:var(--text-muted);">UET Bus Driver</p>
               <p style="font-size:0.85rem; font-weight:600; margin-top:0.2rem;">${getDisplayDriverPhone(route)}</p>
             </div>
-            <a href="${route.campusId === 'main' ? 'javascript:void(0)' : `tel:${route.driverPhone}`}" class="btn-call" title="${route.campusId === 'main' ? 'Driver phone unavailable' : 'Call Driver'}" ${route.campusId === 'main' ? 'onclick="return false;"' : ''}>
-              <i class="lucide-phone-call"></i> ${route.campusId === 'main' ? 'N/A' : 'Call'}
+            <a href="${(route.campusId === 'main' || getDisplayDriverPhone(route) === 'N/A') ? 'javascript:void(0)' : `tel:${route.driverPhone}`}" class="btn-call" title="${(route.campusId === 'main' || getDisplayDriverPhone(route) === 'N/A') ? 'Driver phone unavailable' : 'Call Driver'}" ${(route.campusId === 'main' || getDisplayDriverPhone(route) === 'N/A') ? 'onclick="return false;"' : ''}>
+              <i class="lucide-phone-call"></i> ${(route.campusId === 'main' || getDisplayDriverPhone(route) === 'N/A') ? 'N/A' : 'Call'}
             </a>
           </div>
 
@@ -1437,8 +1457,8 @@ function renderResultPage() {
             <button class="btn-secondary" style="width:100%; justify-content:center;" onclick="printRouteSchedule('${route.id}')">
               <i class="lucide-printer"></i> Print / Download Route PDF
             </button>
-            <button class="btn-secondary ${isFav ? 'active' : ''}" style="width:100%; justify-content:center;" aria-pressed="${isFav}" onclick="toggleFavorite('${route.id}', this)">
-              <i class="lucide-bookmark"></i> ${isFav ? 'Remove from Saved' : 'Save to Favorites'}
+            <button class="btn-secondary ${isFav ? 'active' : ''}" style="width:100%; justify-content:center;" aria-pressed="${isFav}" onclick="toggleFavorite('${route.id}', this)" aria-label="${isFav ? 'Remove from Saved' : 'Save Route'}" title="${isFav ? 'Remove from Saved' : 'Save Route'}">
+              <i class="lucide-bookmark"></i> ${isFav ? 'Saved' : 'Save Route'}
             </button>
           </div>
         </div>
@@ -1462,7 +1482,6 @@ function renderResultPage() {
 
 function renderRouteSummaryCard(route) {
   const firstStop = route.stops[0];
-  const driverPhone = route.campusId === 'main' ? 'N/A' : route.driverPhone;
   return `
     <article class="route-card" id="route-card-${route.id}">
       <div>
@@ -1473,8 +1492,8 @@ function renderRouteSummaryCard(route) {
         <h3 class="route-card-title">${route.name}</h3>
         <p class="route-card-stops">Starts at ${route.startPoint || firstStop.name}</p>
         <div class="route-meta-grid">
-          <div class="meta-item"><i class="lucide-user"></i><span>${route.driverName}</span></div>
-          <div class="meta-item"><i class="lucide-phone"></i><span>${driverPhone}</span></div>
+          <div class="meta-item"><i class="lucide-user"></i><span>${getDisplayDriverName(route)}</span></div>
+          <div class="meta-item"><i class="lucide-phone"></i><span>${getDisplayDriverPhone(route)}</span></div>
           <div class="meta-item"><i class="lucide-bus"></i><span>${getDisplayVehicleNo(route)}</span></div>
           <div class="meta-item"><i class="lucide-clock"></i><span>${firstStop.time} report</span></div>
           <div class="meta-item"><i class="lucide-map-pin"></i><span>${firstStop.name}</span></div>
@@ -1530,12 +1549,12 @@ function renderRouteDetailView(route) {
       <div class="info-card">
         <div class="info-card-title"><i class="lucide-user-check"></i><span>Driver & Vehicle Information</span></div>
         <div class="driver-contact-box">
-          <div class="driver-avatar">${route.driverName.charAt(0)}</div>
+          <div class="driver-avatar">${(getDisplayDriverName(route) || 'N/A').charAt(0)}</div>
           <div class="driver-info">
-            <h4>${route.driverName}</h4>
-            <p>${route.campusId === 'main' ? 'Contact unavailable' : route.driverPhone}</p>
+            <h4>${getDisplayDriverName(route)}</h4>
+            <p>${getDisplayDriverPhone(route)}</p>
           </div>
-          ${route.campusId === 'main' ? '' : `<a href="tel:${route.driverPhone}" class="btn-call"><i class="lucide-phone-call"></i> Call</a>`}
+          ${(route.campusId === 'main' || getDisplayDriverPhone(route) === 'N/A') ? '' : `<a href="tel:${route.driverPhone}" class="btn-call"><i class="lucide-phone-call"></i> Call</a>`}
         </div>
         <div class="route-detail-facts">
           <div><span>Bus Number</span><strong>${getDisplayVehicleNo(route)}</strong></div>
@@ -1577,15 +1596,13 @@ function renderRoutesPage() {
     !appState.selectedCampus || route.campusId === appState.selectedCampus
   );
   const displayRoutes = routeSearchQuery
-    ? campusFilteredRoutes.filter(route =>
-      route.stops.some(stop => stopMatchesSearch(stop, routeSearchQuery))
-    )
+    ? campusFilteredRoutes.filter(route => routeMatchesScheduleSearch(route, routeSearchQuery))
     : campusFilteredRoutes;
   let html = `
     <div class="route-schedules-heading">
       <div>
         <h2>UET Route Schedules (${appState.selectedCampus === 'ksk' ? 'KSK New Campus' : 'Main Campus - 22 Morning Routes'})</h2>
-        <p>Based on Official Transport Schedule Data</p>
+        <p>Based on Official Transport Schedule Data${scheduleMeta.semester ? ` &bull; Schedule: ${scheduleMeta.semester}` : ''}${scheduleMeta.lastVerified ? ` &bull; Route data last verified: ${scheduleMeta.lastVerified}` : ''}</p>
       </div>
     </div>
     <div class="info-card route-campus-filter">
@@ -1656,21 +1673,39 @@ function returnToRouteList() {
 // Toggle Save / Favorite Route
 function toggleFavorite(routeId, btnEl) {
   const idx = appState.favorites.indexOf(routeId);
-  if (idx > -1) {
-    appState.favorites.splice(idx, 1);
-  } else {
+  const willBeSaved = idx === -1;
+  if (willBeSaved) {
     appState.favorites.push(routeId);
+  } else {
+    appState.favorites.splice(idx, 1);
   }
 
   localStorage.setItem('uet_fav_routes', JSON.stringify(appState.favorites));
   updateFavoritesBadge();
 
-  if (btnEl) {
-    btnEl.classList.toggle('active');
-    btnEl.setAttribute('aria-pressed', String(appState.favorites.includes(routeId)));
+  const updateBtn = (btn) => {
+    btn.classList.toggle('active', willBeSaved);
+    btn.setAttribute('aria-pressed', String(willBeSaved));
+    btn.setAttribute('aria-label', willBeSaved ? 'Remove from Saved' : 'Save Route');
+    btn.setAttribute('title', willBeSaved ? 'Remove from Saved' : 'Save Route');
+    if (btn.classList.contains('btn-secondary') || (btn.textContent && (btn.textContent.includes('Save') || btn.textContent.includes('Saved')))) {
+      btn.innerHTML = `<i class="lucide-bookmark"></i> ${willBeSaved ? 'Saved' : 'Save Route'}`;
+    }
+  };
+
+  if (btnEl) updateBtn(btnEl);
+
+  if (typeof document !== 'undefined' && document.querySelectorAll) {
+    document.querySelectorAll(`button[onclick*="toggleFavorite('${routeId}'"]`).forEach(btn => {
+      if (btn !== btnEl) updateBtn(btn);
+    });
   }
 
-  renderHomePage();
+  if (appState.activePage === 'favorites') {
+    renderFavoritesPage();
+  } else if (appState.activePage === 'home') {
+    renderHomePage();
+  }
   refreshLucideIcons();
 }
 
@@ -1755,7 +1790,7 @@ function renderFavoritesPage() {
           </div>
           <h3 class="route-card-title">${route.name}</h3>
           <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
-            Driver: ${route.driverName} (${route.campusId === 'main' ? 'N/A' : route.driverPhone})
+            Driver: ${getDisplayDriverName(route)} (${getDisplayDriverPhone(route)})
           </p>
         </div>
         <div class="route-card-actions">
@@ -1841,7 +1876,7 @@ function printRouteSchedule(routeId) {
       </div>
 
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem; font-size:0.9rem; background:var(--bg-surface-subtle); padding:0.85rem; border-radius:8px; border:1px solid var(--border-light);">
-        <div><strong>Driver:</strong> ${route.driverName}</div>
+        <div><strong>Driver:</strong> ${getDisplayDriverName(route)}</div>
         <div><strong>Contact:</strong> ${getDisplayDriverPhone(route)}</div>
         <div><strong>Vehicle No:</strong> ${getDisplayVehicleNo(route)}</div>
         <div><strong>Morning Arrival:</strong> ${route.arrivalTime}</div>

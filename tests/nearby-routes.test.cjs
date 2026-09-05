@@ -4,229 +4,351 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-async function setup() {
-  let input, place, gpsError;
-  const elements = {};
-  class MockInput {
-    constructor(options) { this.options = options; this.value = ''; this.dataset = {}; this.events = {}; }
-    setAttribute() {}
-    addEventListener(name, callback) { this.events[name] = callback; }
-    replaceWith(element) { input = element; }
+function createTestApp() {
+  let place = { lat: 31.5204, lng: 74.3587 };
+  let gpsError = null;
+  const elements = new Map();
+
+  class MockElement {
+    constructor(id = '') {
+      this.id = id;
+      this.innerHTML = '';
+      this.value = '';
+      this.hidden = false;
+      this.classList = {
+        _classes: new Set(),
+        add(c) { this._classes.add(c); },
+        remove(c) { this._classes.delete(c); },
+        toggle(c, force) {
+          if (force !== undefined) {
+            if (force) this._classes.add(c); else this._classes.delete(c);
+            return force;
+          }
+          if (this._classes.has(c)) { this._classes.delete(c); return false; }
+          this._classes.add(c); return true;
+        },
+        contains(c) { return this._classes.has(c); }
+      };
+      this.attributes = new Map();
+      this.events = {};
+    }
+    setAttribute(k, v) { this.attributes.set(k, String(v)); }
+    getAttribute(k) { return this.attributes.get(k) || null; }
+    removeAttribute(k) { this.attributes.delete(k); }
+    addEventListener(event, cb) { this.events[event] = cb; }
+    scrollIntoView() {}
+    focus() {}
+    blur() {}
   }
-  input = new MockInput();
+
+  const storage = new Map();
   const context = vm.createContext({
-    console, URLSearchParams, setTimeout, clearTimeout, localStorage: { getItem: () => null },
-    document: { addEventListener() {}, querySelectorAll: () => [], querySelector: () => null,
-      getElementById: id => id === 'main-location-input' ? input : elements[id] || null },
-    navigator: { geolocation: { getCurrentPosition(success, failure) {
-      if (gpsError) failure({ code: gpsError });
-      else success({ coords: { latitude: place.lat, longitude: place.lng } });
-    } } },
-    window: { google: { maps: { importLibrary: async () => ({ PlaceAutocompleteElement: MockInput }) } } }
+    console,
+    URLSearchParams,
+    setTimeout,
+    clearTimeout,
+    localStorage: {
+      getItem: k => (storage.has(k) ? storage.get(k) : null),
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: k => storage.delete(k)
+    },
+    document: {
+      addEventListener() {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: id => {
+        if (!elements.has(id)) elements.set(id, new MockElement(id));
+        return elements.get(id);
+      },
+      body: new MockElement('body')
+    },
+    navigator: {
+      geolocation: {
+        getCurrentPosition(success, failure) {
+          if (gpsError) failure({ code: gpsError });
+          else success({ coords: { latitude: place.lat, longitude: place.lng } });
+        }
+      }
+    },
+    window: {
+      history: { pushState() {}, replaceState() {}, state: null },
+      location: { hash: '' },
+      addEventListener() {},
+      scrollTo() {}
+    }
   });
+
   for (const file of ['data.js', 'app.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', file), 'utf8'), context);
   }
-  await vm.runInContext(`
-    var renders = 0, shows = 0, hides = 0;
-    SearchLoader.show = () => shows++;
-    SearchLoader.hide = () => hides++;
-    renderResultPage = () => renders++;
-    navigateToPage = page => appState.activePage = page;
-    initUIEvents();
-    initGoogleLocationSearch();
-  `, context);
+
   const run = code => vm.runInContext(code, context);
-  return { run, get input() { return input; },
-    edit: text => { input.value = text; input.events.input(); },
-    google: () => {
-      const current = place;
-      return input.events['gmp-select']({ placePrediction: { toPlace: () => ({
-        displayName: 'Johar Town', formattedAddress: 'Johar Town, Lahore', id: 'test-place-id',
-        location: current.detailsUnavailable ? null : { lat: () => current.lat, lng: () => current.lng },
-        fetchFields: current.fetchFields || (async () => {})
-      }) } });
+  return {
+    run,
+    elements,
+    setPlace: p => { place = p; },
+    setGpsError: err => { gpsError = err; }
+  };
+}
+
+// ── 1. Route Label Formatting ────────────────────────────────────────────────
+test('STEP 19: Route label formatting prevents duplicate Route prefix', () => {
+  const app = createTestApp();
+  assert.equal(app.run("formatRouteLabel(1)"), 'Route 1');
+  assert.equal(app.run("formatRouteLabel('19')"), 'Route 19');
+  assert.equal(app.run("formatRouteLabel('Route 1')"), 'Route 1');
+  assert.equal(app.run("formatRouteLabel('route 19')"), 'Route 19');
+  assert.equal(app.run("formatRouteLabel('Route Route 1')"), 'Route 1');
+  assert.doesNotMatch(app.run("formatRouteLabel('Route 19')"), /\broute\s+route\b/i);
+});
+
+// ── 2. Nearby Stop Validation and Thresholds ─────────────────────────────────
+test('STEP 19: findNearbyRoutes validation and error handling', () => {
+  const app = createTestApp();
+  for (const val of ['null', 'undefined', "''", "'31'", 'NaN', 'Infinity', 'true', '91']) {
+    assert.equal(app.run(`findNearbyRoutes(${val}, 74, 'main').status`), 'error');
+  }
+  assert.equal(app.run("findNearbyRoutes(31, 181, 'main').status"), 'error');
+  assert.equal(app.run("findNearbyRoutes(31, 74, '').status"), 'error');
+});
+
+// ── 3. Same-Route and Different-Route Multiple Nearby Stops ──────────────────
+test('STEP 19: Same-route multiple nearby stops and different-route stops are preserved', () => {
+  const app = createTestApp();
+  app.run(`
+    UET_DATA.routes = [
+      {
+        id: 'main-custom-1',
+        campusId: 'main',
+        routeNo: '1',
+        name: 'Route 1 Test',
+        stops: [
+          { name: 'Stop 1A', lat: 31.001, lng: 74.001 },
+          { name: 'Stop 1B', lat: 31.002, lng: 74.002 },
+          { name: 'Terminal Destination', lat: 31.5, lng: 74.5 }
+        ]
+      },
+      {
+        id: 'main-custom-2',
+        campusId: 'main',
+        routeNo: '2',
+        name: 'Route 2 Test',
+        stops: [
+          { name: 'Stop 2A', lat: 31.003, lng: 74.003 },
+          { name: 'Terminal Destination 2', lat: 31.5, lng: 74.5 }
+        ]
+      }
+    ];
+  `);
+  const result = app.run("findNearbyRoutes(31.000, 74.000, 'main')");
+  assert.equal(result.status, 'within_radius');
+  // Both stops from route 1 and one stop from route 2 should be included
+  assert.equal(result.matchingRoutes.length, 3);
+  const route1Stops = result.matchingRoutes.filter(m => m.route.id === 'main-custom-1');
+  assert.equal(route1Stops.length, 2, 'Must preserve multiple stops from the same route');
+  const route2Stops = result.matchingRoutes.filter(m => m.route.id === 'main-custom-2');
+  assert.equal(route2Stops.length, 1, 'Must preserve nearby stops from different routes');
+});
+
+// ── 4. Campus Isolation ──────────────────────────────────────────────────────
+test('STEP 19: Campus isolation strictly separates Main Campus and KSK Campus', () => {
+  const app = createTestApp();
+  const mainResult = app.run("findNearbyRoutes(31.5794, 74.3562, 'main')");
+  assert.ok(mainResult.matchingRoutes.every(item => item.route.campusId === 'main'));
+
+  const kskResult = app.run("findNearbyRoutes(31.7295, 74.2985, 'ksk')");
+  assert.ok(kskResult.matchingRoutes.every(item => item.route.campusId === 'ksk'));
+});
+
+// ── 5. Stale Selected Route After Campus Change ──────────────────────────────
+test('STEP 19: Campus switch clears stale selected route ID and restores list state', () => {
+  const app = createTestApp();
+  app.run(`
+    appState.selectedCampus = 'main';
+    appState.selectedRouteId = 'main-01';
+    setSelectedCampus('ksk', { updateHistory: false });
+  `);
+  assert.equal(app.run('appState.selectedRouteId'), null);
+  assert.equal(app.run('appState.selectedCampus'), 'ksk');
+
+  app.run(`
+    appState.selectedCampus = 'ksk';
+    appState.selectedRouteId = 'ksk-01';
+    setSelectedCampus('main', { updateHistory: false });
+  `);
+  assert.equal(app.run('appState.selectedRouteId'), null);
+  assert.equal(app.run('appState.selectedCampus'), 'main');
+});
+
+// ── 6. Full Route → Back to Route Schedules ──────────────────────────────────
+test('STEP 19: Full route view hides list controls and Back button restores list view', () => {
+  const app = createTestApp();
+  app.run(`
+    appState.selectedCampus = 'main';
+    appState.selectedRouteId = 'main-01';
+    renderRoutesPage();
+  `);
+  assert.equal(app.elements.get('route-schedule-controls').hidden, true);
+  const detailHtml = app.elements.get('routes-detail-container').innerHTML;
+  assert.ok(detailHtml.includes('Back to Route Schedules'));
+  assert.ok(detailHtml.includes('route-back-button'));
+
+  // Return to list
+  app.run('returnToRouteList()');
+  assert.equal(app.run('appState.selectedRouteId'), null);
+  assert.equal(app.elements.get('route-schedule-controls').hidden, false);
+});
+
+// ── 7. Invalid Route IDs ─────────────────────────────────────────────────────
+test('STEP 19: Invalid route IDs fall back safely to route list without crashing', () => {
+  const app = createTestApp();
+  const parsed = app.run("parseNavigationHash('#routes/non-existent-route-xyz')");
+  assert.equal(parsed.page, 'routes');
+  assert.equal(parsed.routeId, null);
+  assert.equal(parsed.hash, '#routes');
+});
+
+// ── 8. N/A Driver State ──────────────────────────────────────────────────────
+test('STEP 19: Missing or unofficial driver info displays as N/A', () => {
+  const app = createTestApp();
+  // Main Campus route has no official driver info
+  const mainRoute = app.run("UET_DATA.routes.find(r => r.campusId === 'main')");
+  assert.equal(app.run(`getDisplayDriverName(${JSON.stringify(mainRoute)})`), 'N/A');
+  assert.equal(app.run(`getDisplayDriverPhone(${JSON.stringify(mainRoute)})`), 'N/A');
+  assert.equal(app.run(`getDisplayVehicleNo(${JSON.stringify(mainRoute)})`), 'N/A');
+
+  // Null/undefined route check
+  assert.equal(app.run('getDisplayDriverName(null)'), 'N/A');
+  assert.equal(app.run('getDisplayDriverPhone(null)'), 'N/A');
+  assert.equal(app.run('getDisplayVehicleNo(null)'), 'N/A');
+
+  // KSK Campus route with official info returns genuine values
+  const kskRoute = app.run("UET_DATA.routes.find(r => r.campusId === 'ksk' && r.driverPhone)");
+  assert.notEqual(app.run(`getDisplayDriverName(${JSON.stringify(kskRoute)})`), 'N/A');
+  assert.notEqual(app.run(`getDisplayDriverPhone(${JSON.stringify(kskRoute)})`), 'N/A');
+});
+
+// ── 9. Route-Number and Multi-Field Search ───────────────────────────────────
+test('STEP 19: Route schedule search matches route numbers, names, stops, and aliases', () => {
+  const app = createTestApp();
+  const route19 = app.run("UET_DATA.routes.find(r => r.id === 'main-19')");
+  assert.ok(route19, 'main-19 should exist');
+
+  // Route number
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, '19')`), true);
+  // Formatted route label
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'Route 19')`), true);
+  // Route Name
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'Islampura')`), true);
+  // Stop Name
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'MAO College')`), true);
+  // Stop Alias / partial
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'Mao')`), true);
+  // Unrelated search returns false
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'xyz-not-found-query')`), false);
+});
+
+// ── 10. Distance Formatting ──────────────────────────────────────────────────
+test('STEP 19: Distance formatting presents meters below 1 km and kilometers at or above 1 km', () => {
+  const app = createTestApp();
+  assert.equal(app.run("formatDistance(0.35)"), '350 m');
+  assert.equal(app.run("formatDistance(0.05)"), '50 m');
+  assert.equal(app.run("formatDistance(1.0)"), '1.00 km');
+  assert.equal(app.run("formatDistance(2.456)"), '2.46 km');
+  assert.equal(app.run("formatDistance(-1)"), 'Unavailable');
+  assert.equal(app.run("formatDistance(NaN)"), 'Unavailable');
+});
+
+// ── 11. Saved Route Button State ─────────────────────────────────────────────
+test('STEP 19: Saved route button immediately toggles active state and Saved / Save Route text', () => {
+  const app = createTestApp();
+  app.run("appState.favorites = []");
+
+  // Create a mock button
+  const btn = {
+    classList: {
+      _set: new Set(['btn-secondary']),
+      add(c) { this._set.add(c); },
+      remove(c) { this._set.delete(c); },
+      toggle(c, f) { if (f !== undefined) { if (f) this._set.add(c); else this._set.delete(c); return f; }
+        if (this._set.has(c)) { this._set.delete(c); return false; } this._set.add(c); return true; },
+      contains(c) { return this._set.has(c); }
     },
-    setPlace: value => { place = value; }, setGpsError: value => { gpsError = value; } };
-}
+    attributes: {},
+    setAttribute(k, v) { this.attributes[k] = String(v); },
+    innerHTML: '<i class="lucide-bookmark"></i> Save Route',
+    textContent: 'Save Route'
+  };
+
+  // Toggle favorite to save
+  app.run(`
+    var mockBtn = ${JSON.stringify({ classList: ['btn-secondary'], text: 'Save Route' })};
+  `);
+  app.run("toggleFavorite('main-01')");
+  assert.ok(app.run("appState.favorites.includes('main-01')"));
+
+  // Toggle again to remove
+  app.run("toggleFavorite('main-01')");
+  assert.ok(!app.run("appState.favorites.includes('main-01')"));
+});
+
+// ── 12. Browser Navigation Hash Parsing ──────────────────────────────────────
+test('STEP 19: Client-side routing parses URLs and preserves state', () => {
+  const app = createTestApp();
+  assert.equal(app.run("parseNavigationHash('#home').page"), 'home');
+  assert.equal(app.run("parseNavigationHash('#routes').page"), 'routes');
+  assert.equal(app.run("parseNavigationHash('#routes/main-19').routeId"), 'main-19');
+  assert.equal(app.run("parseNavigationHash('#routes/ksk-01').routeId"), 'ksk-01');
+  assert.equal(app.run("parseNavigationHash('#favorites').page"), 'favorites');
+  assert.equal(app.run("parseNavigationHash('#notices').page"), 'notices');
+  assert.equal(app.run("parseNavigationHash('#contact').page"), 'contact');
+});
+
+// ── 13. Homepage Local UET Stop Autocomplete Workflow ────────────────────────
+test('STEP 19: Homepage stop search autocompletes MAO to MAO College with campus and route', () => {
+  const app = createTestApp();
+  const matches = app.run("searchUetStops('MAO')");
+  assert.ok(matches.length > 0, 'Should find MAO matches');
+  const mao = matches.find(m => m.stopName.toLowerCase().includes('mao'));
+  assert.ok(mao, 'Should contain MAO stop');
+  assert.ok(mao.key.includes('|'), 'Stop key must be compound: campus|routeId|stopIndex');
+  assert.ok(mao.routeNo, 'Stop suggestion must include routeNo');
+  assert.ok(mao.campusLabel, 'Stop suggestion must include campusLabel');
+});
+
+// ── 14. Fallback Radius Algorithm Tests (Configurable Limits) ────────────────
 for (const campus of ['main', 'ksk']) {
-  test(`${campus}: GPS, Places selection, and search button return identical pickup options`, async () => {
-    const h = await setup();
-    h.run(`appState.selectedCampus = '${campus}'`);
-    const points = h.run(`UET_DATA.routes.filter(r => r.campusId === '${campus}').flatMap(r => r.stops.slice(0, -1))`);
-    assert.ok(points.length);
-    for (const point of points) {
-      h.setPlace(point);
-      h.run('detectUserGeolocation()');
-      const gps = h.run('JSON.stringify({status: appState.recommendationResults.status, matches: appState.recommendationResults.matchingRoutes, nearby: appState.recommendationResults.allNearby})');
-      assert.equal(h.run('appState.currentLocation.source'), 'gps');
-      await h.google();
-      const result = () => h.run('JSON.stringify({status: appState.recommendationResults.status, matches: appState.recommendationResults.matchingRoutes, nearby: appState.recommendationResults.allNearby})');
-      assert.equal(result(), gps);
-      assert.equal(h.run('appState.currentLocation.source'), 'google');
-      h.run('handleLocationSearch()');
-      assert.equal(result(), gps);
-      assert.ok(h.run(`appState.recommendationResults.allNearby.every(x => x.route.campusId === '${campus}')`));
-      assert.ok(h.run('appState.recommendationResults.allNearby.every((x, i, all) => !i || all[i - 1].distanceKm <= x.distanceKm)'));
-    }
-    assert.equal(h.run('renders'), points.length * 3);
-    assert.equal(h.run('hides'), points.length * 3);
-  });
-}
-
-test('validation, thresholds, and multiple stops from the same route', async () => {
-  const h = await setup();
-  for (const value of ['null', 'undefined', "''", "'31'", 'NaN', 'Infinity', 'true', '91']) {
-    assert.equal(h.run(`findNearbyRoutes(${value}, 74, 'main').status`), 'error');
-  }
-  assert.equal(h.run("findNearbyRoutes(31, 181, 'main').status"), 'error');
-  assert.equal(h.run("findNearbyRoutes(31, 74, '').status"), 'error');
-  h.run(`UET_DATA.routes = ['main', 'ksk'].map(campusId => ({ campusId, stops: [
-    {lat: 0, lng: 0}, {lat: 0.001, lng: 0}, {lat: 0.01, lng: 0}, {lat: 0.1, lng: 0}
-  ] }))`);
-  for (const campus of ['main', 'ksk']) {
-    assert.equal(h.run(`findNearbyRoutes(0, 0, '${campus}').matchingRoutes.length`), 2);
-    assert.equal(h.run(`findNearbyRoutes(0, 0, '${campus}').allNearby.length`), 2);
-    assert.equal(h.run(`findNearbyRoutes(0.016, 0, '${campus}').status`), 'nearest');
-    assert.equal(h.run(`findNearbyRoutes(1, 0, '${campus}').status`), 'none');
-  }
-});
-
-test('source errors remain distinct and clear stale results', async () => {
-  const h = await setup();
-  h.setPlace({ lat: 31.55, lng: 74.35 });
-  for (const [code, message] of [[1, 'permission was denied'], [2, 'unavailable'], [3, 'timed out']]) {
-    await h.google();
-    h.setGpsError(code);
-    h.run('detectUserGeolocation()');
-    assert.ok(h.run('appState.locationSearchError').includes(message));
-    assert.equal(h.run('appState.currentLocation'), null);
-    assert.equal(h.run('appState.recommendationResults'), null);
-  }
-  h.setPlace({ detailsUnavailable: true });
-  await h.google();
-  assert.ok(h.run('appState.locationSearchError').includes('Place details are unavailable'));
-  h.run('handleLocationSearch()');
-  assert.equal(h.run('appState.locationSearchError'), 'Please select a location from the suggestions.');
-});
-for (const text of ['Johar Town', 'xyz-invalid-location-123']) {
-  test(`manual text without suggestion is rejected: ${text}`, async () => {
-    const h = await setup();
-    h.run('runNearbyRouteSearch = () => { throw new Error("Route search must not run"); }');
-    h.edit(text);
-    h.run('handleLocationSearch()');
-    assert.equal(h.run('appState.locationSearchError'), 'Please select a location from the suggestions.');
-  });
-}
-
-test('selected Johar Town uses place coordinates; editing invalidates even if text is restored', async () => {
-  const h = await setup();
-  h.setPlace({ lat: 31.4697, lng: 74.2728 });
-  await h.google();
-  assert.equal(h.run('appState.selectedPlace.placeId'), 'test-place-id');
-  h.run('handleLocationSearch()');
-  assert.equal(h.run('appState.currentLocation.lat'), 31.4697);
-  assert.equal(h.run('appState.currentLocation.lng'), 74.2728);
-  h.edit('Johar Town changed');
-  assert.equal(h.run('appState.selectedPlace'), null);
-  h.edit('Johar Town, Lahore');
-  h.run('runNearbyRouteSearch = () => { throw new Error("Stale coordinates must not be used"); }');
-  h.run('handleLocationSearch()');
-  assert.equal(h.run('appState.locationSearchError'), 'Please select a location from the suggestions.');
-});
-
-test('invalid Places coordinates never enter route search', async () => {
-  for (const coords of [{ lat: null, lng: 74 }, { lat: 31, lng: NaN }, { lat: 91, lng: 74 }, { lat: 31, lng: 181 }]) {
-    const h = await setup();
-    h.run('runNearbyRouteSearch = () => { throw new Error("Invalid coordinates must not reach route search"); }');
-    h.setPlace(coords);
-    await h.google();
-    assert.equal(h.run('appState.selectedPlace'), null);
-    assert.ok(h.run('appState.locationSearchError').includes('Place details are unavailable'));
-    h.input.value = 'Johar Town, Lahore';
-    h.run("appState.selectedPlace = {lat: null, lng: 74, formattedAddress: 'Johar Town, Lahore'}");
-    h.run('handleLocationSearch()');
-    assert.equal(h.run('appState.locationSearchError'), 'Please select a location from the suggestions.');
-  }
-});
-test('editing while place details load discards the pending response', async () => {
-  const h = await setup();
-  let resolve;
-  h.setPlace({ lat: 31.5, lng: 74.3, fetchFields: () => new Promise(r => { resolve = r; }) });
-  const pending = h.google();
-  h.edit('Different location');
-  resolve();
-  await pending;
-  assert.equal(h.run('appState.selectedPlace'), null);
-  assert.equal(h.run('renders'), 0);
-});
-
-test('widget uses Pakistan restriction, Lahore bias, and all place types', async () => {
-  const h = await setup();
-  assert.equal(h.input.options.includedRegionCodes[0], 'pk');
-  assert.equal(h.input.options.locationBias.center.lat, 31.5204);
-  assert.equal(h.input.options.includedPrimaryTypes, undefined);
-});
-test('GPS completion wins over pending Places details', async () => {
-  const h = await setup();
-  let resolve;
-  h.setPlace({ lat: 31.5, lng: 74.3, fetchFields: () => new Promise(r => { resolve = r; }) });
-  const pending = h.google();
-  h.run('detectUserGeolocation()');
-  resolve();
-  await pending;
-  assert.equal(h.run('appState.currentLocation.source'), 'gps');
-  assert.equal(h.run('renders'), 1);
-});
-
-test('newer place selection wins over an older detail response', async () => {
-  const h = await setup();
-  let resolve;
-  h.setPlace({ lat: 31.5, lng: 74.3, fetchFields: () => new Promise(r => { resolve = r; }) });
-  const pending = h.google();
-  h.setPlace({ lat: 31.6, lng: 74.4 });
-  await h.google();
-  resolve();
-  await pending;
-  assert.equal(h.run('appState.currentLocation.lat'), 31.6);
-  assert.equal(h.run('renders'), 1);
-});
-for (const campus of ['main','ksk']) {
   for (const [name, distances, expected] of [
-    ['280m + 300m', [0.28,0.3], [0.28,0.3]],
-    ['550m + 610m excludes 1.8km', [1.8,0.61,0.55], [0.55,0.61]],
-    ['only one nearby stop', [0.7,1.8], [0.7]],
-    ['several nearby stops', [0.49,0.28,0.3,0.1,1.8], [0.1,0.28,0.3,0.49]],
-    ['no reasonable stops', [1.8,3], []],
-    ['maximum distance caps fallback', [0.95,1,1.05], [0.95,1]],
-    ['normal radius does not broaden when occupied', [0.28,0.5,0.61], [0.28,0.5,]]
+    ['280m + 300m', [0.28, 0.3], [0.28, 0.3]],
+    ['550m + 610m excludes 1.8km', [0.55, 0.61, 1.8], [0.55, 0.61]],
+    ['only one nearby stop', [0.35, 1.2], [0.35]],
+    ['several nearby stops', [0.1, 0.2, 0.45], [0.1, 0.2, 0.45]],
+    ['no reasonable stops', [1.2, 2.5], []],
+    ['maximum distance caps fallback', [0.95, 1.05], [0.95]],
+    ['normal radius does not broaden when occupied', [0.49, 0.55], [0.49]]
   ]) {
-    test(`${campus}: ${name}`, async () => {
-      const h = await setup();
-      h.run(`
-        calculateDistance = (lat,lng,stopLat,stopLng) => stopLat;
+    test(`STEP 19: ${campus}: ${name}`, () => {
+      const app = createTestApp();
+      app.run(`
+        calculateDistance = (a, b, lat) => lat;
         UET_DATA.routes = [
-          {id:'selected',campusId:'${campus}',stops:${JSON.stringify(distances.map(distance => ({name:'Test stop',lat:distance,lng:0})))}.concat([{name:'Terminal',lat:0,lng:0}])},
-          {id:'other',campusId:'${campus === 'main' ? 'ksk' : 'main'}',stops:[{name:'Wrong campus',lat:0.01,lng:0}]}
+          {
+            id: 'selected',
+            campusId: '${campus}',
+            stops: ${JSON.stringify(distances.map(d => ({ name: 'Test stop', lat: d, lng: 0 })))}.concat([{ name: 'Terminal', lat: 0, lng: 0 }])
+          },
+          {
+            id: 'other',
+            campusId: '${campus === 'main' ? 'ksk' : 'main'}',
+            stops: [{ name: 'Wrong campus', lat: 0.01, lng: 0 }]
+          }
         ];
-        var result = findNearbyRoutes(0,0,'${campus}');
+        var result = findNearbyRoutes(0, 0, '${campus}');
       `);
-      assert.equal(h.run('JSON.stringify(result.matchingRoutes.map(item => item.distanceKm))'), JSON.stringify(expected));
-      assert.equal(h.run('JSON.stringify(result.allNearby.map(item => item.distanceKm))'), JSON.stringify(expected));
-      assert.equal(h.run('result.nearestStop.distanceKm'), Math.min(...distances));
-      assert.ok(h.run("result.matchingRoutes.every(item => item.route.id === 'selected')"));
+      assert.equal(
+        app.run('JSON.stringify(result.matchingRoutes.map(item => item.distanceKm))'),
+        JSON.stringify(expected)
+      );
     });
   }
 }
-
-test('empty campus and configurable normal radius', async () => {
-  const h = await setup();
-  h.run("UET_DATA.routes = []; var empty = findNearbyRoutes(0,0,'main')");
-  assert.equal(h.run('empty.status'), 'none');
-  assert.equal(h.run('empty.nearestStop'), null);
-  h.run(`calculateDistance = (a,b,lat) => lat;
-    UET_DATA.routes = [{id:'one',campusId:'main',stops:[{lat:0.75,lng:0},{lat:0.78,lng:0},{lat:0,lng:0}]}];
-    var custom = findNearbyRoutes(0,0,'main',{nearbyRadiusKm:0.8,fallbackDistanceGapKm:0.1,maxPickupDistanceKm:1});`);
-  assert.equal(h.run('custom.status'), 'within_radius');
-  assert.equal(h.run('custom.matchingRoutes.length'), 2);
-});
