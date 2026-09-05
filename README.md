@@ -51,9 +51,9 @@ Run `node --test tests/*.test.cjs` for all regression tests, including rendered 
 All current stops use coordinates. Future verified Google Place IDs may be used only by explicitly setting `placeIdVerified: true` alongside a nonempty `placeId`; coordinate verification status alone is not sufficient. Coordinates are still required as the destination/fallback. This optional flag affects only navigation, never route recommendations. See [Google Maps URL directions documentation](https://developers.google.com/maps/documentation/urls/get-started#directions-action).
 ## Nearby pickup selection policy
 
-`NEARBY_ROUTE_CONFIG` in `js/app.js` controls the normal radius (500 m), fallback distance gap (150 m farther than the nearest stop), and maximum recommended pickup distance (1 km). Distances are straight-line estimates, not walking routes.
+`NEARBY_ROUTE_CONFIG` in `js/app.js` controls the nearby search radius (1.5 km). Distances are straight-line estimates, not walking routes.
 
-The finder sorts all individual pickup stops for the selected campus and records the nearest stop. It returns every stop within the normal radius when any qualify. Otherwise it returns the nearest stop and candidates no more than 150 m farther away, capped at 1 km. If the nearest stop exceeds the maximum, no pickup is recommended. `nearestStop` still identifies the nearest candidate for callers, but is not rendered as a recommendation. Multiple stops from one route remain separate. `matchingRoutes` and `allNearby` contain only the selected reasonable candidates; there is no separate 5 km suggestions list.
+The finder sorts all individual pickup stops for the selected campus and calculates straight-line distance to every valid pickup stop. It returns every valid stop that is within 1.5 km of the user's location, sorted from nearest to farthest. Multiple nearby stops on the same route and across different routes within 1.5 km are preserved. If no stop is found within 1.5 km, the interface indicates that no nearby UET bus stop was found within 1.5 km.
 
 For example, 550 m and 610 m are offered together; 1.8 km is excluded. The optional fourth finder argument accepts a complete configuration object for tests or other callers; the UI uses the shared defaults.
 ## Homepage statistics

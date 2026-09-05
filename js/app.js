@@ -21,7 +21,7 @@ let appState = {
 
 // Centralized schedule version & data freshness metadata.
 const scheduleMeta = Object.freeze({
-  semester: 'Spring Semester 2026',
+  semester: 'Fall 2026',
   sourceDate: null,
   lastVerified: null
 });
@@ -252,9 +252,9 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 
 // Pickup selection policy (kilometers). Adjust these named limits together.
 const NEARBY_ROUTE_CONFIG = Object.freeze({
-  nearbyRadiusKm: 0.5,
+  nearbyRadiusKm: 1.5,
   fallbackDistanceGapKm: 0.15,
-  maxPickupDistanceKm: 1.0
+  maxPickupDistanceKm: 1.5
 });
 
 /** Find individual campus pickup stops, preserving multiple stops on one route. */function findNearbyRoutes(userLat, userLng, campusFilter, config = NEARBY_ROUTE_CONFIG) {
@@ -1249,8 +1249,8 @@ function renderResultPage() {
       ${campusToggleBarHtml}
       <div class="info-card no-result-box">
         <div class="no-result-icon"><i class="lucide-search-x"></i></div>
-        <h3>No nearby UET bus stop found.</h3>
-        <p>No UET pickup stop in the schedule data was found within ${formatDistance(rec?.maxPickupDistanceKm ?? NEARBY_ROUTE_CONFIG.maxPickupDistanceKm)} of your location for <strong>${currentCampusName}</strong>.</p>
+        <h3>No nearby UET bus stop found within 1.5 km.</h3>
+        <p>No UET pickup stop in the schedule data was found within 1.5 km of your location for <strong>${currentCampusName}</strong>.</p>
         <div style="margin-top:1.5rem; display:flex; gap:0.75rem; justify-content:center; flex-wrap:wrap;">
           <button class="btn-find-bus" onclick="detectUserGeolocation()">
             <i class="lucide-crosshair"></i> Retry GPS
@@ -1320,7 +1320,7 @@ function renderResultPage() {
           <span>Nearby Pickup Options (${rec.matchingRoutes.length} Found)</span>
         </div>
         <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1rem;">
-          ${rec.status === 'nearest' ? 'The nearest pickup stop and options at a similar distance, sorted from nearest to farthest:' : `Pickup stops within ${formatDistance(rec.nearbyRadiusKm ?? NEARBY_ROUTE_CONFIG.nearbyRadiusKm)}, sorted from nearest to farthest:`}
+          ${rec.status === 'nearest' ? 'The nearest pickup stop and options at a similar distance, sorted from nearest to farthest:' : `Pickup stops within 1.5 km, sorted from nearest to farthest:`}
         </p>
         <div style="display:flex; flex-direction:column; gap:0.6rem;">
           ${rec.matchingRoutes.map((item, i) => {

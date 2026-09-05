@@ -241,9 +241,14 @@ test('STEP 19: Route schedule search matches route numbers, names, stops, and al
   // Route Name
   assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'Islampura')`), true);
   // Stop Name
-  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'MAO College')`), true);
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'Anarkali')`), true);
   // Stop Alias / partial
-  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'Mao')`), true);
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'Anar')`), true);
+
+  // Also verify MAO College on ksk-05
+  const routeKsk5 = app.run("UET_DATA.routes.find(r => r.id === 'ksk-05')");
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(routeKsk5)}, 'MAO College')`), true);
+  assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(routeKsk5)}, 'Mao')`), true);
   // Unrelated search returns false
   assert.equal(app.run(`routeMatchesScheduleSearch(${JSON.stringify(route19)}, 'xyz-not-found-query')`), false);
 });
@@ -316,16 +321,17 @@ test('STEP 19: Homepage stop search autocompletes MAO to MAO College with campus
   assert.ok(mao.campusLabel, 'Stop suggestion must include campusLabel');
 });
 
-// ── 14. Fallback Radius Algorithm Tests (Configurable Limits) ────────────────
+// ── 14. 1.5 km Radius Algorithm Tests ────────────────────────────────────────
 for (const campus of ['main', 'ksk']) {
   for (const [name, distances, expected] of [
     ['280m + 300m', [0.28, 0.3], [0.28, 0.3]],
-    ['550m + 610m excludes 1.8km', [0.55, 0.61, 1.8], [0.55, 0.61]],
-    ['only one nearby stop', [0.35, 1.2], [0.35]],
-    ['several nearby stops', [0.1, 0.2, 0.45], [0.1, 0.2, 0.45]],
-    ['no reasonable stops', [1.2, 2.5], []],
-    ['maximum distance caps fallback', [0.95, 1.05], [0.95]],
-    ['normal radius does not broaden when occupied', [0.49, 0.55], [0.49]]
+    ['user example: 0.4km, 0.9km, 1.3km included; 1.6km excluded', [0.4, 0.9, 1.3, 1.6], [0.4, 0.9, 1.3]],
+    ['boundary: 1.49km included, 1.50km included, 1.51km excluded', [1.49, 1.50, 1.51], [1.49, 1.50]],
+    ['only one nearby stop within 1.5km', [0.35, 1.8], [0.35]],
+    ['several nearby stops within 1.5km', [0.1, 0.2, 0.45, 1.2], [0.1, 0.2, 0.45, 1.2]],
+    ['no stops within 1.5km', [1.51, 2.5], []],
+    ['stop at 1.50km exactly is included', [1.50], [1.50]],
+    ['stop at 1.51km is excluded', [1.51], []]
   ]) {
     test(`STEP 19: ${campus}: ${name}`, () => {
       const app = createTestApp();
@@ -352,3 +358,128 @@ for (const campus of ['main', 'ksk']) {
     });
   }
 }
+
+// ── 15. 1.5 km Boundary and Search Range Explicit Verification ──────────────
+test('1.5 km boundary: 1.49 km included, 1.50 km included, 1.51 km excluded', () => {
+  const app = createTestApp();
+  app.run(`
+    calculateDistance = (a, b, lat) => lat;
+    UET_DATA.routes = [
+      {
+        id: 'boundary-route',
+        campusId: 'main',
+        routeNo: '1',
+        name: 'Boundary Route',
+        stops: [
+          { name: 'Stop 1.49km', lat: 1.49, lng: 0 },
+          { name: 'Stop 1.50km', lat: 1.50, lng: 0 },
+          { name: 'Stop 1.51km', lat: 1.51, lng: 0 },
+          { name: 'Terminal Campus', lat: 0, lng: 0 }
+        ]
+      }
+    ];
+    var result = findNearbyRoutes(0, 0, 'main');
+  `);
+  assert.equal(
+    app.run('JSON.stringify(result.matchingRoutes.map(item => item.distanceKm))'),
+    JSON.stringify([1.49, 1.50])
+  );
+  assert.equal(app.run("result.matchingRoutes.some(item => item.stop.name === 'Stop 1.49km')"), true, '1.49 km must be included');
+  assert.equal(app.run("result.matchingRoutes.some(item => item.stop.name === 'Stop 1.50km')"), true, '1.50 km must be included');
+  assert.equal(app.run("result.matchingRoutes.some(item => item.stop.name === 'Stop 1.51km')"), false, '1.51 km must be excluded');
+});
+
+test('User example: 0.4 km, 0.9 km, 1.3 km included; 1.6 km excluded', () => {
+  const app = createTestApp();
+  app.run(`
+    calculateDistance = (a, b, lat) => lat;
+    UET_DATA.routes = [
+      {
+        id: 'example-route',
+        campusId: 'main',
+        routeNo: '1',
+        name: 'Example Route',
+        stops: [
+          { name: 'Stop A', lat: 0.4, lng: 0 },
+          { name: 'Stop B', lat: 0.9, lng: 0 },
+          { name: 'Stop C', lat: 1.3, lng: 0 },
+          { name: 'Stop D', lat: 1.6, lng: 0 },
+          { name: 'Terminal Campus', lat: 0, lng: 0 }
+        ]
+      }
+    ];
+    var result = findNearbyRoutes(0, 0, 'main');
+  `);
+  assert.equal(
+    app.run('JSON.stringify(result.matchingRoutes.map(item => item.stop.name))'),
+    JSON.stringify(['Stop A', 'Stop B', 'Stop C'])
+  );
+  assert.equal(app.run('result.matchingRoutes.length'), 3);
+});
+
+test('No nearby stop within 1.5 km shows exact message: No nearby UET bus stop found within 1.5 km.', () => {
+  const app = createTestApp();
+  app.run(`
+    calculateDistance = (a, b, lat) => lat;
+    UET_DATA.routes = [
+      {
+        id: 'far-route',
+        campusId: 'main',
+        routeNo: '1',
+        name: 'Far Route',
+        stops: [
+          { name: 'Stop Far', lat: 1.6, lng: 0 },
+          { name: 'Terminal Campus', lat: 0, lng: 0 }
+        ]
+      }
+    ];
+    appState.selectedCampus = 'main';
+    appState.recommendationResults = findNearbyRoutes(0, 0, 'main');
+    renderResultPage();
+  `);
+  assert.equal(app.run('appState.recommendationResults.status'), 'none');
+  assert.equal(app.run('appState.recommendationResults.matchingRoutes.length'), 0);
+  const html = app.elements.get('result-content-container').innerHTML;
+  assert.ok(html.includes('No nearby UET bus stop found within 1.5 km.'), 'UI must show: No nearby UET bus stop found within 1.5 km.');
+  assert.ok(html.includes('within 1.5 km of your location'), 'UI description must specify 1.5 km');
+});
+
+test('Multiple stops on same route and multiple different routes preserved within 1.5 km and sorted nearest to farthest', () => {
+  const app = createTestApp();
+  app.run(`
+    calculateDistance = (a, b, lat) => lat;
+    UET_DATA.routes = [
+      {
+        id: 'route-r1',
+        campusId: 'main',
+        routeNo: '1',
+        name: 'Route 1',
+        stops: [
+          { name: 'R1-Stop1', lat: 1.2, lng: 0 },
+          { name: 'R1-Stop2', lat: 0.3, lng: 0 },
+          { name: 'Terminal', lat: 0, lng: 0 }
+        ]
+      },
+      {
+        id: 'route-r2',
+        campusId: 'main',
+        routeNo: '2',
+        name: 'Route 2',
+        stops: [
+          { name: 'R2-Stop1', lat: 0.8, lng: 0 },
+          { name: 'R2-Stop2', lat: 1.7, lng: 0 },
+          { name: 'Terminal', lat: 0, lng: 0 }
+        ]
+      }
+    ];
+    var result = findNearbyRoutes(0, 0, 'main');
+  `);
+  assert.equal(
+    app.run('JSON.stringify(result.matchingRoutes.map(item => item.stop.name))'),
+    JSON.stringify(['R1-Stop2', 'R2-Stop1', 'R1-Stop1'])
+  );
+  assert.equal(
+    app.run('JSON.stringify(result.matchingRoutes.map(item => item.distanceKm))'),
+    JSON.stringify([0.3, 0.8, 1.2])
+  );
+});
